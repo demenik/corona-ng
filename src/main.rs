@@ -1,3 +1,109 @@
-fn main() {
-    println!("Hello, world!");
+mod app;
+mod ui;
+
+use crate::app::{App, BackendEvent, CurrentScreen, UiEvent};
+use crate::ui::components::start_screen::StartScreenAction;
+
+use crossterm::event::KeyCode::{self, Char};
+use ratatui::DefaultTerminal;
+use std::{io, time::Duration};
+use tokio::sync::mpsc;
+
+#[tokio::main]
+async fn main() -> io::Result<()> {
+    let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(32);
+    let (backend_tx, mut backend_rx) = mpsc::channel::<BackendEvent>(32);
+
+    let mut app = App::new(ui_tx);
+
+    tokio::spawn(async move {
+        loop {
+            if let Ok(event) = ui_rx.try_recv()
+                && let UiEvent::Quit = event
+            {
+                break;
+            }
+
+            let now = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+            let _ = backend_tx.send(BackendEvent::ClockTick(now)).await;
+
+            tokio::time::sleep(Duration::from_millis(10)).await;
+        }
+    });
+
+    let mut terminal = ratatui::init();
+
+    let result = run_ui(&mut terminal, &mut app, &mut backend_rx);
+
+    ratatui::restore();
+    result
+}
+
+fn run_ui(
+    terminal: &mut DefaultTerminal,
+    app: &mut App,
+    backend_rx: &mut mpsc::Receiver<BackendEvent>,
+) -> io::Result<()> {
+    let tick_rate = Duration::from_millis(10);
+    let mut last_tick = std::time::Instant::now();
+
+    loop {
+        while let Ok(msg) = backend_rx.try_recv() {
+            match msg {
+                BackendEvent::ClockTick(time) => app.clock = time,
+                BackendEvent::LoginSuccess => app.is_logged_in = true,
+                BackendEvent::LoginFailed(err) => app.login_error = Some(err),
+            }
+        }
+
+        terminal.draw(|f| {
+            ui::draw(f, app);
+        })?;
+
+        let timeout = tick_rate
+            .checked_sub(last_tick.elapsed())
+            .unwrap_or_else(|| Duration::from_secs(0));
+
+        if crossterm::event::poll(timeout)?
+            && let crossterm::event::Event::Key(key) = crossterm::event::read()?
+        {
+            if key.code == Char('c')
+                && key
+                    .modifiers
+                    .contains(crossterm::event::KeyModifiers::CONTROL)
+            {
+                let _ = app.tx.try_send(UiEvent::Quit);
+                return Ok(());
+            }
+
+            match app.current_screen {
+                CurrentScreen::Start => {
+                    let action = app.start_screen.handle_key(key);
+                    match action {
+                        StartScreenAction::Login => app.current_screen = CurrentScreen::Login,
+                        StartScreenAction::OpenWeb => {
+                            let url = "https://campusonline.uni-ulm.de/CoronaNG/index.html";
+                            if let Err(e) = open::that(url) {
+                                eprintln!("Error while opening in the browser: {}", e);
+                            }
+                        }
+                        StartScreenAction::Quit => {
+                            let _ = app.tx.try_send(UiEvent::Quit);
+                            return Ok(());
+                        }
+                        StartScreenAction::None => {}
+                    }
+                }
+                CurrentScreen::Login | CurrentScreen::Dashboard => {
+                    if key.code == KeyCode::Esc {
+                        app.current_screen = CurrentScreen::Start;
+                    }
+                }
+            }
+        }
+
+        if last_tick.elapsed() >= tick_rate {
+            last_tick = std::time::Instant::now();
+        }
+    }
 }
