@@ -3,6 +3,7 @@ use ratatui::prelude::*;
 
 use crate::app::CurrentScreen;
 
+pub mod dashboard_screen;
 pub mod login_screen;
 pub mod start_screen;
 
@@ -15,5 +16,7 @@ pub trait Component {
 pub enum ComponentAction {
     ChangeScreen(CurrentScreen),
     TriggerLogin(String, String),
+    Logout,
+    CoursesFetch,
     Quit,
 }

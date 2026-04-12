@@ -43,13 +43,20 @@ fn run_ui(
                 BackendEvent::ClockTick(time) => app.clock = time,
                 BackendEvent::LoginSuccess => {
                     app.login_screen.is_loading = false;
+                    let _ = app.tx.try_send(UiEvent::FetchCourses);
                     app.current_screen = CurrentScreen::Dashboard;
                 }
                 BackendEvent::LoginFailed(err) => {
                     app.login_screen.set_status(format!("Fehler: {}", err));
                 }
-                BackendEvent::CoursesUpdate(courses) => {}
-                BackendEvent::FetchFailed(err) => {}
+                BackendEvent::CoursesUpdate(courses) => {
+                    app.dashboard_screen.courses = Some(courses);
+                    app.dashboard_screen
+                        .set_status("Kurse wurden aktualisiert.".to_string());
+                }
+                BackendEvent::FetchFailed(err) => {
+                    app.dashboard_screen.set_status(format!("Fehler: {}", err));
+                }
             }
         }
 
@@ -76,7 +83,7 @@ fn run_ui(
             let action = match app.current_screen {
                 CurrentScreen::Start => app.start_screen.handle_key(key),
                 CurrentScreen::Login => app.login_screen.handle_key(key),
-                CurrentScreen::Dashboard => None,
+                CurrentScreen::Dashboard => app.dashboard_screen.handle_key(key),
             };
 
             if let Some(act) = action {
@@ -84,6 +91,17 @@ fn run_ui(
                     ComponentAction::ChangeScreen(new_screen) => app.current_screen = new_screen,
                     ComponentAction::TriggerLogin(user, pass) => {
                         let _ = app.tx.try_send(UiEvent::Login(user, pass));
+                    }
+                    ComponentAction::Logout => {
+                        let _ = app.tx.try_send(UiEvent::Logout);
+                        app.current_screen = CurrentScreen::Start;
+                        app.login_screen.status_message = None;
+                        app.login_screen.is_loading = false;
+                    }
+                    ComponentAction::CoursesFetch => {
+                        app.dashboard_screen
+                            .set_status("Kurse werden aktualisiert...".to_string());
+                        let _ = app.tx.try_send(UiEvent::FetchCourses);
                     }
                     ComponentAction::Quit => return Ok(()),
                 }

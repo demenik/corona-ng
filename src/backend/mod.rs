@@ -30,6 +30,9 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                     UiEvent::Login(user, pass) => {
                         state.network.login(&user, &pass, backend_tx.clone()).await;
                     }
+                    UiEvent::Logout => {
+                        state.network = NetworkClient::new();
+                    }
                     UiEvent::FetchCourses => {
                         state.network.get_courses(backend_tx.clone()).await;
                     }

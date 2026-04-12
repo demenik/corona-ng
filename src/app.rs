@@ -1,4 +1,6 @@
-use crate::ui::components::{login_screen::LoginScreen, start_screen::StartScreen};
+use crate::ui::components::{
+    dashboard_screen::DashboardScreen, login_screen::LoginScreen, start_screen::StartScreen,
+};
 use tokio::sync::mpsc;
 
 pub enum CurrentScreen {
@@ -29,6 +31,7 @@ pub struct Course {
 
 pub enum UiEvent {
     Login(String, String),
+    Logout,
     FetchCourses,
     Quit,
 }
@@ -45,6 +48,7 @@ pub struct App {
     pub current_screen: CurrentScreen,
     pub start_screen: StartScreen,
     pub login_screen: LoginScreen,
+    pub dashboard_screen: DashboardScreen,
 
     pub clock: String,
     pub is_logged_in: bool,
@@ -59,6 +63,7 @@ impl App {
             current_screen: CurrentScreen::Start,
             start_screen: StartScreen::new(),
             login_screen: LoginScreen::new(),
+            dashboard_screen: DashboardScreen::new(),
 
             clock: "00:00:00.000".to_string(),
             is_logged_in: false,
