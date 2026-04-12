@@ -7,8 +7,29 @@ pub enum CurrentScreen {
     Dashboard,
 }
 
+#[derive(Debug, Clone, PartialEq)]
+pub enum CourseStatus {
+    Open,
+    Closed,
+    Enrolled,
+    Full,
+    Unknown,
+}
+
+#[derive(Debug, Clone)]
+pub struct Course {
+    pub id: String,
+    pub name: String,
+    pub note: String,
+    pub observations: u32,
+    pub participants: u32,
+    pub max_participants: u32,
+    pub status: CourseStatus,
+}
+
 pub enum UiEvent {
     Login(String, String),
+    FetchCourses,
     Quit,
 }
 
@@ -16,6 +37,8 @@ pub enum BackendEvent {
     ClockTick(String),
     LoginSuccess,
     LoginFailed(String),
+    CoursesUpdate(Vec<Course>),
+    FetchFailed(String),
 }
 
 pub struct App {

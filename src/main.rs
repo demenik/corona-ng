@@ -48,6 +48,8 @@ fn run_ui(
                 BackendEvent::LoginFailed(err) => {
                     app.login_screen.set_status(format!("Fehler: {}", err));
                 }
+                BackendEvent::CoursesUpdate(courses) => {}
+                BackendEvent::FetchFailed(err) => {}
             }
         }
 

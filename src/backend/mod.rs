@@ -8,6 +8,7 @@ use crate::{
 };
 
 pub mod network;
+pub mod scraper;
 
 pub struct BackendState {
     pub schedule: HashMap<String, Vec<String>>,
@@ -28,6 +29,9 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                 match ui_event {
                     UiEvent::Login(user, pass) => {
                         state.network.login(&user, &pass, backend_tx.clone()).await;
+                    }
+                    UiEvent::FetchCourses => {
+                        state.network.get_courses(backend_tx.clone()).await;
                     }
                     UiEvent::Quit => break,
                 }
