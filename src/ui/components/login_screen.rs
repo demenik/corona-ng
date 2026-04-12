@@ -134,6 +134,14 @@ impl Component for LoginScreen {
                 None
             }
             KeyCode::Enter => match self.focused_field {
+                LoginField::Username => {
+                    self.focused_field = LoginField::Password;
+                    None
+                }
+                LoginField::Password => {
+                    self.focused_field = LoginField::LoginBtn;
+                    None
+                }
                 LoginField::LoginBtn => {
                     self.is_loading = true;
                     self.status_message = Some("Einloggen...".to_string());
@@ -143,7 +151,6 @@ impl Component for LoginScreen {
                     ))
                 }
                 LoginField::CancelBtn => Some(ComponentAction::ChangeScreen(CurrentScreen::Start)),
-                _ => None,
             },
             _ => None,
         }
