@@ -2,7 +2,7 @@ use chrono::{Local, NaiveTime};
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     prelude::*,
-    widgets::{Block, Borders, Cell, List, ListItem, Paragraph, Row, Table},
+    widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
 
 use crate::{
@@ -133,15 +133,14 @@ impl Component for DashboardScreen {
             .constraints([
                 Constraint::Length(3), // Header
                 Constraint::Min(0),    // Body
-                Constraint::Length(3), // Footer (Status)
             ])
             .split(area);
 
         let body_layout = Layout::default()
             .direction(Direction::Horizontal)
             .constraints([
-                Constraint::Percentage(70), // Courses
-                Constraint::Percentage(30), // Sidebar
+                Constraint::Fill(1),    // Courses
+                Constraint::Length(25), // Sidebar
             ])
             .split(main_layout[1]);
 
@@ -193,7 +192,7 @@ impl Component for DashboardScreen {
                     let status_str = match course.status {
                         CourseStatus::Open => "Offen",
                         CourseStatus::Closed => "Geschlossen",
-                        CourseStatus::Enrolled => "Du bist Teilnehmer",
+                        CourseStatus::Enrolled => "Beigetreten",
                         CourseStatus::Full => "Voll",
                         CourseStatus::Unknown => "Unbekannt",
                     };
@@ -213,9 +212,9 @@ impl Component for DashboardScreen {
         let table = Table::new(
             rows,
             [
-                Constraint::Percentage(60),
-                Constraint::Percentage(20),
-                Constraint::Percentage(20),
+                Constraint::Fill(1),
+                Constraint::Length(11),
+                Constraint::Length(15),
             ],
         )
         .block(course_block)
@@ -240,7 +239,9 @@ impl Component for DashboardScreen {
         // Live Clock
         let now = Local::now().format("%H:%M:%S%.3f").to_string();
         f.render_widget(
-            Paragraph::new(now).block(Block::default().borders(Borders::ALL).title(" Live Zeit ")),
+            Paragraph::new(now)
+                .alignment(Alignment::Center)
+                .block(Block::default().borders(Borders::ALL).title(" Live Zeit ")),
             sidebar_chunks[0],
         );
 
@@ -253,18 +254,21 @@ impl Component for DashboardScreen {
 
         let target_times = ["16:00", "16:30"];
 
-        let countdown_items: Vec<ListItem> = target_times
+        let countdown_lines: Vec<String> = target_times
             .iter()
-            .map(|&t| ListItem::new(format!("{} -> {}", t, self.calculate_countdown(t))))
+            .map(|&t| format!("{} -> {}", t, self.calculate_countdown(t)))
             .collect();
 
-        let countdown_list = List::new(countdown_items).block(
-            Block::default()
-                .borders(Borders::ALL)
-                .title(" Countdowns ")
-                .border_style(countdown_border),
-        );
-        f.render_widget(countdown_list, sidebar_chunks[1]);
+        let countdown_text = countdown_lines.join("\n");
+        let countdown_widget = Paragraph::new(countdown_text)
+            .block(
+                Block::default()
+                    .borders(Borders::ALL)
+                    .title(" Countdowns ")
+                    .border_style(countdown_border),
+            )
+            .alignment(Alignment::Center);
+        f.render_widget(countdown_widget, sidebar_chunks[1]);
 
         // Reload Button
         let reload_style = if self.focus == DashboardFocus::ReloadBtn {
