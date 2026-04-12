@@ -26,6 +26,7 @@ pub struct DashboardScreen {
     selected_course_idx: usize,
 
     pub status_message: Option<String>,
+    pub username: Option<String>,
 }
 
 impl DashboardScreen {
@@ -36,6 +37,7 @@ impl DashboardScreen {
             selected_course_idx: 0,
 
             status_message: None,
+            username: None,
         }
     }
 
@@ -146,7 +148,8 @@ impl Component for DashboardScreen {
 
         // --- HEADER ---
         let header = Paragraph::new(format!(
-            "Hallo User. Du hast {} geladene Kurse\n{}",
+            "Hallo {}. Du hast {} geladene Kurse\n{}",
+            self.username.as_ref().unwrap_or(&"Nutzer".to_string()),
             self.courses.as_ref().map_or(0, |c| c.len()),
             self.status_message.clone().unwrap_or("".to_string())
         ))

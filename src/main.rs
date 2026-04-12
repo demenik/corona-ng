@@ -44,6 +44,7 @@ fn run_ui(
                 BackendEvent::LoginSuccess => {
                     app.login_screen.is_loading = false;
                     let _ = app.tx.try_send(UiEvent::FetchCourses);
+                    app.dashboard_screen.username = Some(app.login_screen.username.clone());
                     app.current_screen = CurrentScreen::Dashboard;
                 }
                 BackendEvent::LoginFailed(err) => {
@@ -97,6 +98,7 @@ fn run_ui(
                         app.current_screen = CurrentScreen::Start;
                         app.login_screen.status_message = None;
                         app.login_screen.is_loading = false;
+                        app.dashboard_screen.username = None;
                     }
                     ComponentAction::CoursesFetch => {
                         app.dashboard_screen
