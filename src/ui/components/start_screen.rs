@@ -51,7 +51,8 @@ impl Component for StartScreen {
             KeyCode::Enter => match self.selected_index {
                 0 => Some(ComponentAction::ChangeScreen(CurrentScreen::Login)),
                 1 => {
-                    let _ = open::that("https://campusonline.uni-ulm.de/CoronaNG/index.html");
+                    let _ =
+                        open::that("https://campusonline.uni-ulm.de/CoronaNG/user/mycorona.html");
                     None
                 }
                 2 => Some(ComponentAction::Quit),
