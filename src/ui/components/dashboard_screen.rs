@@ -306,14 +306,26 @@ impl Component for DashboardScreen {
             Style::default()
         };
 
-        let target_times = ["16:00", "16:30"];
+        let mut target_times: Vec<String> = self
+            .schedules
+            .values()
+            .flatten()
+            .cloned()
+            .collect::<std::collections::HashSet<_>>()
+            .into_iter()
+            .collect();
+        target_times.sort();
 
         let countdown_lines: Vec<String> = target_times
             .iter()
-            .map(|&t| format!("{} -> {}", t, self.calculate_countdown(t)))
+            .map(|t| format!("{} -> {}", t, self.calculate_countdown(t)))
             .collect();
 
-        let countdown_text = countdown_lines.join("\n");
+        let countdown_text = if countdown_lines.is_empty() {
+            "Keine Zeit gesetzt".to_string()
+        } else {
+            countdown_lines.join("\n")
+        };
         let countdown_widget = Paragraph::new(countdown_text)
             .block(
                 Block::default()

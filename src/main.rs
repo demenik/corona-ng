@@ -108,9 +108,7 @@ fn run_ui(
                     ComponentAction::SetSchedule(course_id, time) => {
                         app.dashboard_screen
                             .schedules
-                            .entry(course_id.clone())
-                            .or_default()
-                            .push(time.clone());
+                            .insert(course_id.clone(), vec![time.clone()]);
                         let _ = app.tx.try_send(UiEvent::SetSchedule(course_id, time));
                     }
                     ComponentAction::Quit => return Ok(()),
