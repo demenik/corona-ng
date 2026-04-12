@@ -12,8 +12,7 @@ pub fn draw(f: &mut Frame, app: &mut App) {
             app.start_screen.draw(f, f.area());
         }
         CurrentScreen::Login => {
-            let widget = ratatui::widgets::Paragraph::new("ESC");
-            f.render_widget(widget, f.area());
+            app.login_screen.draw(f, f.area());
         }
         CurrentScreen::Dashboard => {
             let widget = ratatui::widgets::Paragraph::new("ESC");

@@ -51,8 +51,13 @@ fn run_ui(
         while let Ok(msg) = backend_rx.try_recv() {
             match msg {
                 BackendEvent::ClockTick(time) => app.clock = time,
-                BackendEvent::LoginSuccess => app.is_logged_in = true,
-                BackendEvent::LoginFailed(err) => app.login_error = Some(err),
+                BackendEvent::LoginSuccess => {
+                    app.login_screen.is_loading = false;
+                    app.current_screen = CurrentScreen::Dashboard;
+                }
+                BackendEvent::LoginFailed(err) => {
+                    app.login_screen.set_status(format!("Fehler: {}", err));
+                }
             }
         }
 
@@ -78,7 +83,7 @@ fn run_ui(
 
             let action = match app.current_screen {
                 CurrentScreen::Start => app.start_screen.handle_key(key),
-                CurrentScreen::Login => None,
+                CurrentScreen::Login => app.login_screen.handle_key(key),
                 CurrentScreen::Dashboard => None,
             };
 

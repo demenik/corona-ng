@@ -3,6 +3,7 @@ use ratatui::prelude::*;
 
 use crate::app::CurrentScreen;
 
+pub mod login_screen;
 pub mod start_screen;
 
 pub trait Component {
