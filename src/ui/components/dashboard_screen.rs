@@ -198,10 +198,21 @@ impl Component for DashboardScreen {
                     let is_selected =
                         self.focus == DashboardFocus::CourseList && i == self.selected_course_idx;
 
+                    let has_schedule = self.schedules.get(&course.id).and_then(|v| v.last());
+
+                    let btn_text = match has_schedule {
+                        Some(time) => format!("[ {} ]", time),
+                        None => "[ Zeit setzen ]".to_string(),
+                    };
+
                     let btn_style = if is_selected {
                         Style::default()
                             .fg(Color::Black)
                             .bg(Color::Magenta)
+                            .add_modifier(Modifier::BOLD)
+                    } else if has_schedule.is_some() {
+                        Style::default()
+                            .fg(Color::Magenta)
                             .add_modifier(Modifier::BOLD)
                     } else {
                         Style::default().fg(Color::DarkGray)
@@ -235,7 +246,7 @@ impl Component for DashboardScreen {
                             ))
                             .alignment(HorizontalAlignment::Right),
                         ),
-                        Cell::from(ratatui::text::Span::styled("[ Zeit setzen ]", btn_style)),
+                        Cell::from(ratatui::text::Span::styled(btn_text, btn_style)),
                     ])
                     .style(row_style)
                 })
@@ -256,8 +267,14 @@ impl Component for DashboardScreen {
         )
         .block(course_block)
         .header(
-            Row::new(vec!["Name", "Status", "Beobachter", "Teilnehmer", "Aktion"])
-                .style(Style::default().add_modifier(Modifier::UNDERLINED)),
+            Row::new(vec![
+                "Name",
+                "Status",
+                "Beobachter",
+                "Teilnehmer",
+                "Anmeldezeit",
+            ])
+            .style(Style::default().add_modifier(Modifier::UNDERLINED)),
         );
 
         f.render_widget(table, body_layout[0]);
