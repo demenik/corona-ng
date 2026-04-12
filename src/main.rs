@@ -95,11 +95,22 @@ fn run_ui(
                 }
                 BackendEvent::CoursesUpdate(courses) => {
                     app.dashboard_screen.courses = Some(courses);
-                    app.dashboard_screen
-                        .set_status("Kurse wurden aktualisiert.".to_string());
                 }
                 BackendEvent::FetchFailed(err) => {
                     app.dashboard_screen.set_status(format!("Fehler: {}", err));
+                }
+                BackendEvent::SignUpResult(report) => {
+                    app.dashboard_screen.set_status(format!(
+                        "Anmeldung abgeschlossen: {} erfolgreich, {} fehlgeschlagen.",
+                        report.total_success, report.total_failed
+                    ));
+                    let _ = app.tx.try_send(UiEvent::FetchCourses);
+                }
+                BackendEvent::InternalMessage(msg) => {
+                    app.dashboard_screen.set_status(msg);
+                }
+                BackendEvent::SignUpAttempt(_attempt, _report) => {
+                    // TODO: Update a live popup state
                 }
             }
         }

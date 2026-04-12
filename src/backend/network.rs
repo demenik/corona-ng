@@ -1,13 +1,14 @@
-use std::sync::Arc;
+use std::{collections::HashMap, sync::Arc};
 
-use reqwest::{Client, cookie::Jar, multipart};
+use reqwest::{Client, Response, cookie::Jar, multipart};
 use tokio::sync::mpsc;
 
 use crate::{
-    app::BackendEvent,
-    backend::scraper::{check_login_error, parse_courses},
+    app::{BackendEvent, BatchSignUpReport},
+    backend::scraper::{self, check_login_error, parse_courses},
 };
 
+#[derive(Clone)]
 pub struct NetworkClient {
     client: Client,
     cookie_jar: Arc<Jar>,
@@ -83,6 +84,95 @@ impl NetworkClient {
             Err(e) => {
                 let _ = tx.send(BackendEvent::FetchFailed(e.to_string())).await;
             }
+        }
+    }
+
+    pub async fn sign_up_courses(&self, ids: Vec<String>, tx: mpsc::Sender<BackendEvent>) {
+        if ids.is_empty() {
+            return;
+        }
+
+        let courses_url = format!("{}/user/mycorona.html", BASE_URL);
+        let mut last_report: Option<BatchSignUpReport> = None;
+
+        for i in 0..4 {
+            let attempt_num = (i + 1) as u32;
+
+            let mut body = HashMap::new();
+            for id in &ids {
+                body.insert(format!("check_{}", id), "on");
+                body.insert(format!("sort_{}", id), "000");
+            }
+            body.insert("action".into(), "5");
+            body.insert("scope".into(), "inspections");
+
+            let result: Result<Response, reqwest::Error> = self
+                .client
+                .post(&courses_url)
+                .header("Referer", &courses_url)
+                .header("Origin", "https://campusonline.uni-ulm.de")
+                .form(&body)
+                .send()
+                .await;
+
+            let report = match result {
+                Ok(response) if response.status().is_success() => match response.text().await {
+                    Ok(html) => {
+                        if html.contains("id=\"IndexForm\"") {
+                            let _ = tx
+                                .send(BackendEvent::SignUpAttempt(
+                                    attempt_num,
+                                    BatchSignUpReport::from_general_error(
+                                        "Session abgelaufen.".to_string(),
+                                    ),
+                                ))
+                                .await;
+                            let _ = tx
+                                .send(BackendEvent::InternalMessage(
+                                    "Anmeldung wegen abgelaufener Session abgebrochen.".to_string(),
+                                ))
+                                .await;
+                            return;
+                        }
+
+                        scraper::parse_sign_up_results(&html)
+                    }
+                    Err(e) => BatchSignUpReport::from_general_error(format!(
+                        "Fehler beim Lesen der Antwort: {}",
+                        e
+                    )),
+                },
+                Ok(response) => BatchSignUpReport::from_general_error(format!(
+                    "Server-Fehler: Status {}",
+                    response.status()
+                )),
+                Err(e) => BatchSignUpReport::from_general_error(format!("Netzwerkfehler: {}", e)),
+            };
+
+            let _ = tx
+                .send(BackendEvent::SignUpAttempt(attempt_num, report.clone()))
+                .await;
+
+            if report.total_success > 0 || report.total_failed > 0 {
+                last_report = Some(report);
+            }
+
+            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+        }
+
+        if let Some(report) = last_report {
+            let _ = tx.send(BackendEvent::SignUpResult(report)).await;
+            let _ = tx
+                .send(BackendEvent::InternalMessage(
+                    "Anmeldung abgeschlossen.".to_string(),
+                ))
+                .await;
+        } else {
+            let _ = tx
+                .send(BackendEvent::InternalMessage(
+                    "Anmeldung abgeschlossen, aber keine Ergebnisse extrahiert.".to_string(),
+                ))
+                .await;
         }
     }
 }

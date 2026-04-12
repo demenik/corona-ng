@@ -32,6 +32,37 @@ pub struct Course {
     pub status: CourseStatus,
 }
 
+#[derive(Debug, Clone)]
+pub enum SignUpOutcome {
+    Success,
+    Failed(String),
+}
+
+#[derive(Debug, Clone)]
+pub struct CourseSignUpResult {
+    pub course_name: String,
+    pub outcome: SignUpOutcome,
+}
+
+#[derive(Debug, Clone)]
+pub struct BatchSignUpReport {
+    pub details: Vec<CourseSignUpResult>,
+    pub total_success: u32,
+    pub total_failed: u32,
+    pub general_error: Option<String>,
+}
+
+impl BatchSignUpReport {
+    pub fn from_general_error(error: String) -> Self {
+        Self {
+            details: Vec::new(),
+            total_success: 0,
+            total_failed: 0,
+            general_error: Some(error),
+        }
+    }
+}
+
 pub enum UiEvent {
     Login(String, String),
     Logout,
@@ -47,6 +78,9 @@ pub enum BackendEvent {
     LoginFailed(String),
     CoursesUpdate(Vec<Course>),
     FetchFailed(String),
+    SignUpResult(BatchSignUpReport),
+    SignUpAttempt(u32, BatchSignUpReport),
+    InternalMessage(String),
 }
 
 pub struct App {

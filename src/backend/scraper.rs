@@ -1,6 +1,7 @@
+use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use scraper::{Html, Selector};
 
-use crate::app::{Course, CourseStatus};
+use crate::app::{BatchSignUpReport, Course, CourseSignUpResult, CourseStatus, SignUpOutcome};
 
 pub fn parse_courses(html: &str) -> Vec<Course> {
     let document = Html::parse_document(html);
@@ -96,4 +97,108 @@ pub fn check_login_error(html: &str) -> Option<String> {
     }
 
     None
+}
+
+fn parse_german_month(month: &str) -> Option<&str> {
+    match month.to_lowercase().as_str() {
+        "januar" => Some("01"),
+        "februar" => Some("02"),
+        "märz" => Some("03"),
+        "april" => Some("04"),
+        "mai" => Some("05"),
+        "juni" => Some("06"),
+        "juli" => Some("07"),
+        "august" => Some("08"),
+        "september" => Some("09"),
+        "oktober" => Some("10"),
+        "november" => Some("11"),
+        "dezember" => Some("12"),
+        _ => None,
+    }
+}
+
+pub fn get_server_time(html: &str) -> Option<DateTime<Local>> {
+    let document = Html::parse_document(html);
+    let selector = Selector::parse("#mblock_innen").unwrap();
+
+    let full_text = document
+        .select(&selector)
+        .next()?
+        .text()
+        .collect::<String>();
+
+    let time_part = full_text.split("Serverzeit:").nth(1)?.trim();
+    let parts: Vec<&str> = time_part
+        .split(|c| c == ',' || c == ' ')
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    if parts.len() < 5 {
+        return None;
+    }
+
+    let day = parts[1].replace(".", "");
+    let month_name = parts[2];
+    let year = parts[3];
+    let time = parts[4];
+
+    let month = parse_german_month(month_name)?;
+
+    let datetime_str = format!("{}-{}-{}T{}", year, month, day, time);
+
+    NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%dT%H:%M:%S")
+        .ok()
+        .and_then(|naive| Local.from_local_datetime(&naive).single())
+}
+
+pub fn parse_sign_up_results(html: &str) -> BatchSignUpReport {
+    let document = Html::parse_document(html);
+    let span_selector = Selector::parse(".subcl > ul li.re > span").unwrap();
+
+    let mut details = Vec::new();
+    let mut total_success = 0;
+    let mut total_failed = 0;
+
+    let extract_first_number = |s: &str| -> u32 {
+        let num_str: String = s
+            .chars()
+            .skip_while(|c| !c.is_ascii_digit())
+            .take_while(|c| c.is_ascii_digit())
+            .collect();
+        num_str.parse().unwrap_or(0)
+    };
+
+    for span in document.select(&span_selector) {
+        let text = span.text().collect::<String>().trim().to_string();
+
+        if text.contains("Teilnahme an der Teilveranstaltung") {
+            let course_name = text
+                .split('\'')
+                .nth(1)
+                .unwrap_or("Unbekannter Kurs")
+                .to_string();
+
+            let outcome = if text.contains("fehlgeschlagen") {
+                SignUpOutcome::Failed(text.clone())
+            } else {
+                SignUpOutcome::Success
+            };
+
+            details.push(CourseSignUpResult {
+                course_name,
+                outcome,
+            });
+        } else if text.contains("Teilnahmen waren erfolgreich") {
+            total_success = extract_first_number(&text);
+        } else if text.contains("versuchte Teilnahmen fehlgeschlagen") {
+            total_failed = extract_first_number(&text);
+        }
+    }
+
+    BatchSignUpReport {
+        details,
+        total_success,
+        total_failed,
+        general_error: None,
+    }
 }
