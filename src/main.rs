@@ -3,7 +3,7 @@ mod backend;
 mod store;
 mod ui;
 
-use crate::app::{App, BackendEvent, CurrentScreen, UiEvent};
+use crate::app::{App, BackendEvent, CurrentScreen, SIGNUP_ATTEMPTS, SignUpOutcome, UiEvent};
 use crate::store::{Credentials, JsonScheduleStore, PersistentStore, SecureCredentialStore};
 use crate::ui::components::{
     Component, ComponentAction,
@@ -17,7 +17,7 @@ use tokio::sync::mpsc;
 
 #[tokio::main]
 async fn main() -> io::Result<()> {
-    let (ui_tx, mut ui_rx) = mpsc::channel::<UiEvent>(32);
+    let (ui_tx, ui_rx) = mpsc::channel::<UiEvent>(32);
     let (backend_tx, mut backend_rx) = mpsc::channel::<BackendEvent>(32);
 
     let mut app = App::new(ui_tx);
@@ -103,14 +103,31 @@ fn run_ui(
                     app.dashboard_screen.set_status(format!("Fehler: {}", err));
                 }
                 BackendEvent::SignUpResult(report) => {
-                    app.dashboard_screen.set_status(format!(
-                        "Anmeldung abgeschlossen: {} erfolgreich, {} fehlgeschlagen.",
-                        report.total_success, report.total_failed
-                    ));
                     if let Some(popup) = &mut app.dashboard_screen.signup_popup {
                         popup.is_finished = true;
+
+                        let last_idx = (SIGNUP_ATTEMPTS - 1) as u32;
+
+                        // Populate errors from report
+                        for detail in &report.details {
+                            if let SignUpOutcome::Failed(err) = &detail.outcome {
+                                if let Some(id) = &detail.course_id {
+                                    let errors = popup.course_errors.entry(id.clone()).or_default();
+                                    let entry = (err.clone(), last_idx);
+                                    if !errors.contains(&entry) {
+                                        errors.push(entry);
+                                    }
+                                } else if let Some(req_detail) =
+                                    &mut popup.request_details[last_idx as usize]
+                                    && !req_detail.errors.contains(err)
+                                {
+                                    req_detail.errors.push(err.clone());
+                                }
+                            }
+                        }
+
                         // Mark all requests as either Success or Failed based on the final general_error status
-                        for i in 0..5 {
+                        for i in 0..SIGNUP_ATTEMPTS {
                             if popup.request_statuses[i] == RequestStatus::Waiting
                                 || popup.request_statuses[i] == RequestStatus::Running
                             {
@@ -119,6 +136,13 @@ fn run_ui(
                                 } else {
                                     RequestStatus::Failed
                                 };
+
+                                if let Some(err) = &report.general_error
+                                    && let Some(detail) = &mut popup.request_details[i]
+                                    && !detail.errors.contains(err)
+                                {
+                                    detail.errors.push(err.clone());
+                                }
                             }
                         }
                     }
@@ -130,7 +154,20 @@ fn run_ui(
                 BackendEvent::SignUpAttempt(attempt, report) => {
                     if let Some(popup) = &mut app.dashboard_screen.signup_popup {
                         let idx = (attempt as usize).saturating_sub(1);
-                        if idx < 5 {
+                        if idx < SIGNUP_ATTEMPTS {
+                            // Populate errors from report
+                            for detail in &report.details {
+                                if let SignUpOutcome::Failed(err) = &detail.outcome
+                                    && let Some(id) = &detail.course_id
+                                {
+                                    let errors = popup.course_errors.entry(id.clone()).or_default();
+                                    let entry = (err.clone(), idx as u32);
+                                    if !errors.contains(&entry) {
+                                        errors.push(entry);
+                                    }
+                                }
+                            }
+
                             // Mark previous as Success if they were running and this one is starting
                             if idx > 0 && popup.request_statuses[idx - 1] == RequestStatus::Running
                             {
@@ -147,11 +184,28 @@ fn run_ui(
                             // Update details with success/fail counts and local/server times
                             let local_time =
                                 chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+
+                            let mut errors = Vec::new();
+                            if let Some(err) = &report.general_error {
+                                errors.push(err.clone());
+                            }
+
+                            // Also include course results that didn't match an ID as general errors for this request
+                            for detail in &report.details {
+                                if let SignUpOutcome::Failed(err) = &detail.outcome
+                                    && detail.course_id.is_none()
+                                    && !errors.contains(err)
+                                {
+                                    errors.push(err.clone());
+                                }
+                            }
+
                             popup.request_details[idx] = Some(RequestDetail {
                                 success_count: report.total_success,
                                 failed_count: report.total_failed,
                                 local_time,
                                 server_time: report.server_time.clone(),
+                                errors,
                             });
                         }
                     }

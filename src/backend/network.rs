@@ -135,7 +135,14 @@ impl NetworkClient {
                             return;
                         }
 
-                        scraper::parse_sign_up_results(&html)
+                        let courses = parse_courses(&html);
+                        let mut course_map = HashMap::new();
+                        for c in &courses {
+                            course_map.insert(c.name.clone(), c.id.clone());
+                        }
+                        let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
+
+                        scraper::parse_sign_up_results(&html, &course_map)
                     }
                     Err(e) => BatchSignUpReport::from_general_error(format!(
                         "Fehler beim Lesen der Antwort: {}",
@@ -162,11 +169,6 @@ impl NetworkClient {
 
         if let Some(report) = last_report {
             let _ = tx.send(BackendEvent::SignUpResult(report)).await;
-            let _ = tx
-                .send(BackendEvent::InternalMessage(
-                    "Anmeldung abgeschlossen.".to_string(),
-                ))
-                .await;
         } else {
             let _ = tx
                 .send(BackendEvent::InternalMessage(

@@ -5,6 +5,7 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table},
 };
+use std::collections::HashMap;
 
 #[derive(Clone, Copy, PartialEq)]
 pub enum RequestStatus {
@@ -19,6 +20,7 @@ pub struct RequestDetail {
     pub failed_count: u32,
     pub local_time: String,
     pub server_time: Option<String>,
+    pub errors: Vec<String>,
 }
 
 pub struct SignUpPopup {
@@ -26,6 +28,7 @@ pub struct SignUpPopup {
     pub request_statuses: [RequestStatus; SIGNUP_ATTEMPTS],
     pub request_details: [Option<RequestDetail>; SIGNUP_ATTEMPTS],
     pub course_ids: Vec<String>,
+    pub course_errors: HashMap<String, Vec<(String, u32)>>, // (error, attempt_idx)
     pub is_finished: bool,
     pub spinner: Spinner,
 }
@@ -37,6 +40,7 @@ impl SignUpPopup {
             request_statuses: [RequestStatus::Waiting; SIGNUP_ATTEMPTS],
             request_details: [const { None }; SIGNUP_ATTEMPTS],
             course_ids,
+            course_errors: HashMap::new(),
             is_finished: false,
             spinner: Spinner::new(),
         }
@@ -62,7 +66,7 @@ impl SignUpPopup {
     }
 
     pub fn draw(&self, f: &mut Frame, area: Rect, courses: &[Course]) {
-        let popup_area = centered_rect(60, 60, area);
+        let popup_area = centered_rect(70, 70, area);
         f.render_widget(Clear, popup_area);
 
         let block = Block::default()
@@ -79,13 +83,13 @@ impl SignUpPopup {
         let chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3),                          // Countdown
-                Constraint::Length(SIGNUP_ATTEMPTS as u16 + 3), // Requests (Header + rows + borders)
-                Constraint::Min(0),                             // Courses
+                Constraint::Length(2), // Countdown
+                Constraint::Fill(2),   // Requests + Errors
+                Constraint::Fill(3),   // Courses
             ])
             .split(inner_area);
 
-        // Countdown
+        // 1. Countdown
         let countdown = self.calculate_countdown();
         f.render_widget(
             Paragraph::new(format!("Zeit bis Start: {}", countdown))
@@ -95,38 +99,39 @@ impl SignUpPopup {
             chunks[0],
         );
 
-        // Requests
-        let rows: Vec<Row> = self
-            .request_statuses
-            .iter()
-            .enumerate()
-            .map(|(i, status)| {
-                let (icon, style) = match status {
-                    RequestStatus::Waiting => ("🕒", Style::default().fg(Color::DarkGray)),
-                    RequestStatus::Running => {
-                        (self.spinner.frame(), Style::default().fg(Color::Yellow))
-                    }
-                    RequestStatus::Success => ("✅", Style::default().fg(Color::Green)),
-                    RequestStatus::Failed => ("❌", Style::default().fg(Color::Red)),
+        // 2. Requests Table
+        let mut rows = Vec::new();
+        for i in 0..SIGNUP_ATTEMPTS {
+            let status = self.request_statuses[i];
+            let (icon, style) = match status {
+                RequestStatus::Waiting => ("🕒", Style::default().fg(Color::DarkGray)),
+                RequestStatus::Running => {
+                    (self.spinner.frame(), Style::default().fg(Color::Yellow))
+                }
+                RequestStatus::Success => ("✅", Style::default().fg(Color::Green)),
+                RequestStatus::Failed => ("❌", Style::default().fg(Color::Red)),
+            };
+
+            let (s_text, f_text, local_text, server_text, errors) =
+                if let Some(detail) = &self.request_details[i] {
+                    (
+                        detail.success_count.to_string(),
+                        detail.failed_count.to_string(),
+                        detail.local_time.clone(),
+                        detail.server_time.clone().unwrap_or_default(),
+                        &detail.errors,
+                    )
+                } else {
+                    (
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        "".to_string(),
+                        &vec![],
+                    )
                 };
 
-                let (s_text, f_text, local_text, server_text) =
-                    if let Some(detail) = &self.request_details[i] {
-                        (
-                            detail.success_count.to_string(),
-                            detail.failed_count.to_string(),
-                            detail.local_time.clone(),
-                            detail.server_time.clone().unwrap_or_default(),
-                        )
-                    } else {
-                        (
-                            "".to_string(),
-                            "".to_string(),
-                            "".to_string(),
-                            "".to_string(),
-                        )
-                    };
-
+            rows.push(
                 Row::new(vec![
                     Cell::from(icon),
                     Cell::from(format!("Anfrage #{}", i + 1)),
@@ -135,19 +140,34 @@ impl SignUpPopup {
                     Cell::from(local_text),
                     Cell::from(server_text),
                 ])
-                .style(style)
-            })
-            .collect();
+                .style(style),
+            );
+
+            // General errors for this request
+            for err in errors {
+                rows.push(Row::new(vec![
+                    Cell::from(""),
+                    Cell::from(Line::from(vec![
+                        Span::styled("  └─ ⚠️ ", Style::default().fg(Color::Yellow)),
+                        Span::styled(err.clone(), Style::default().fg(Color::Red)),
+                    ])),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                    Cell::from(""),
+                ]));
+            }
+        }
 
         let table = Table::new(
             rows,
             [
-                Constraint::Length(2),  // Icon
-                Constraint::Length(15), // Anfrage #
-                Constraint::Length(4),  // Success
-                Constraint::Length(4),  // Failed
-                Constraint::Fill(1),    // Local Time
-                Constraint::Fill(1),    // Server Time
+                Constraint::Length(2),
+                Constraint::Fill(1),
+                Constraint::Length(5),
+                Constraint::Length(5),
+                Constraint::Length(15),
+                Constraint::Length(11),
             ],
         )
         .header(
@@ -172,7 +192,7 @@ impl SignUpPopup {
         );
         f.render_widget(table, chunks[1]);
 
-        // Courses
+        // 3. Courses
         let courses_to_show: Vec<&Course> = courses
             .iter()
             .filter(|c| self.course_ids.contains(&c.id))
@@ -183,7 +203,7 @@ impl SignUpPopup {
 
         let course_items: Vec<ListItem> = courses_to_show
             .iter()
-            .map(|course| {
+            .flat_map(|course| {
                 let icon = if course.status == CourseStatus::Enrolled {
                     Span::styled("✅", Style::default().fg(Color::Green))
                 } else if all_done {
@@ -194,11 +214,28 @@ impl SignUpPopup {
                     Span::styled("🕒", Style::default().fg(Color::DarkGray))
                 };
 
-                ListItem::new(Line::from(vec![
+                let mut items = vec![ListItem::new(Line::from(vec![
                     icon,
                     Span::raw(" "),
                     Span::raw(course.name.clone()),
-                ]))
+                ]))];
+
+                if let Some(errors) = self.course_errors.get(&course.id) {
+                    for (error, attempt_idx) in errors {
+                        items.push(ListItem::new(Line::from(vec![
+                            Span::styled(
+                                format!("  └─ ⚠️ {}", error),
+                                Style::default().fg(Color::Red),
+                            ),
+                            Span::raw(" "),
+                            Span::styled(
+                                format!("({}/{})", attempt_idx + 1, SIGNUP_ATTEMPTS),
+                                Style::default().fg(Color::DarkGray),
+                            ),
+                        ])));
+                    }
+                }
+                items
             })
             .collect();
 

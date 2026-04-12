@@ -1,5 +1,6 @@
 use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use scraper::{Html, Selector};
+use std::collections::HashMap;
 
 use crate::app::{BatchSignUpReport, Course, CourseSignUpResult, CourseStatus, SignUpOutcome};
 
@@ -30,13 +31,11 @@ pub fn parse_courses(html: &str) -> Vec<Course> {
         let name = tds[1]
             .select(&a_sel)
             .next()
-            .map(|a| {
-                a.text()
-                    .map(|s| s.trim())
-                    .filter(|s| !s.is_empty())
-                    .collect::<Vec<_>>()
-                    .join(" ")
+            .and_then(|a| {
+                a.children()
+                    .find_map(|node| node.value().as_text().map(|t| t.to_string()))
             })
+            .map(|text| text.split_whitespace().collect::<Vec<_>>().join(" "))
             .unwrap_or_default();
 
         let note = tds[1].text().last().unwrap_or("").trim().to_string();
@@ -151,7 +150,10 @@ pub fn get_server_time(html: &str) -> Option<DateTime<Local>> {
         .and_then(|naive| Local.from_local_datetime(&naive).single())
 }
 
-pub fn parse_sign_up_results(html: &str) -> BatchSignUpReport {
+pub fn parse_sign_up_results(
+    html: &str,
+    course_map: &HashMap<String, String>,
+) -> BatchSignUpReport {
     let document = Html::parse_document(html);
     let span_selector = Selector::parse(".subcl > ul li.re > span").unwrap();
 
@@ -172,19 +174,60 @@ pub fn parse_sign_up_results(html: &str) -> BatchSignUpReport {
         let text = span.text().collect::<String>().trim().to_string();
 
         if text.contains("Teilnahme an der Teilveranstaltung") {
-            let course_name = text
-                .split('\'')
-                .nth(1)
-                .unwrap_or("Unbekannter Kurs")
-                .to_string();
+            let raw_course_name = text.split('\'').nth(1).unwrap_or("Unbekannter Kurs");
+            let course_name = raw_course_name
+                .split_whitespace()
+                .collect::<Vec<_>>()
+                .join(" ");
 
-            let outcome = if text.contains("fehlgeschlagen") {
-                SignUpOutcome::Failed(text.clone())
+            let outcome = if let Some(err_part) = text.split("fehlgeschlagen").nth(1) {
+                let trimmed = err_part.trim();
+                let cleaner = trimmed
+                    .trim_start_matches(':')
+                    .trim_start_matches('.')
+                    .trim();
+                if cleaner.is_empty() {
+                    SignUpOutcome::Failed("Fehlgeschlagen".to_string())
+                } else {
+                    SignUpOutcome::Failed(cleaner.to_string())
+                }
+            } else if text.contains("fehlgeschlagen") {
+                SignUpOutcome::Failed("Fehlgeschlagen".to_string())
             } else {
                 SignUpOutcome::Success
             };
 
+            let mut course_id = course_map.get(&course_name).cloned();
+
+            if course_id.is_none() {
+                // 1. Check if names are prefixes of each other
+                // 2. Check if names match after stripping trailing parenthesized info (like "(Seminar)")
+                fn strip_last_parens(s: &str) -> &str {
+                    if let Some(pos) = s.rfind('(') {
+                        s[..pos].trim()
+                    } else {
+                        s
+                    }
+                }
+
+                let course_base = strip_last_parens(&course_name);
+
+                for (name, id) in course_map {
+                    if course_name.starts_with(name) || name.starts_with(&course_name) {
+                        course_id = Some(id.clone());
+                        break;
+                    }
+
+                    let map_base = strip_last_parens(name);
+                    if !course_base.is_empty() && course_base == map_base {
+                        course_id = Some(id.clone());
+                        break;
+                    }
+                }
+            }
+
             details.push(CourseSignUpResult {
+                course_id,
                 course_name,
                 outcome,
             });

@@ -43,6 +43,7 @@ pub enum SignUpOutcome {
 
 #[derive(Debug, Clone)]
 pub struct CourseSignUpResult {
+    pub course_id: Option<String>,
     pub course_name: String,
     pub outcome: SignUpOutcome,
 }
