@@ -8,7 +8,7 @@ use std::collections::HashMap;
 
 use crate::{
     app::{Course, CourseStatus},
-    ui::components::{Component, time_input::TimeInput},
+    ui::components::{Component, signup_popup::SignUpPopup, time_input::TimeInput},
 };
 
 use super::ComponentAction;
@@ -30,6 +30,7 @@ pub struct DashboardScreen {
     pub status_message: Option<String>,
     pub username: Option<String>,
     pub time_input: Option<TimeInput>,
+    pub signup_popup: Option<SignUpPopup>,
 }
 
 impl DashboardScreen {
@@ -43,6 +44,7 @@ impl DashboardScreen {
             status_message: None,
             username: None,
             time_input: None,
+            signup_popup: None,
         }
     }
 
@@ -78,6 +80,13 @@ impl Default for DashboardScreen {
 
 impl Component for DashboardScreen {
     fn handle_key(&mut self, key: KeyEvent) -> Option<ComponentAction> {
+        if self.signup_popup.is_some() {
+            if key.code == KeyCode::Esc {
+                self.signup_popup = None;
+            }
+            return None;
+        }
+
         if let Some(time_input) = &mut self.time_input {
             if key.code == KeyCode::Esc {
                 self.time_input = None;
@@ -377,6 +386,10 @@ impl Component for DashboardScreen {
 
         if let Some(time_input) = &self.time_input {
             time_input.draw(f, area);
+        }
+
+        if let Some(signup_popup) = &self.signup_popup {
+            signup_popup.draw(f, area, self.courses.as_deref().unwrap_or(&[]));
         }
     }
 }

@@ -6,6 +6,9 @@ use crate::{
 };
 use tokio::sync::mpsc;
 
+pub const SIGNUP_ATTEMPTS: usize = 5;
+
+#[derive(PartialEq)]
 pub enum CurrentScreen {
     Start,
     Login,
@@ -50,6 +53,7 @@ pub struct BatchSignUpReport {
     pub total_success: u32,
     pub total_failed: u32,
     pub general_error: Option<String>,
+    pub server_time: Option<String>,
 }
 
 impl BatchSignUpReport {
@@ -59,6 +63,7 @@ impl BatchSignUpReport {
             total_success: 0,
             total_failed: 0,
             general_error: Some(error),
+            server_time: None,
         }
     }
 }

@@ -4,7 +4,7 @@ use reqwest::{Client, Response, cookie::Jar};
 use tokio::sync::mpsc;
 
 use crate::{
-    app::{BackendEvent, BatchSignUpReport},
+    app::{BackendEvent, BatchSignUpReport, SIGNUP_ATTEMPTS},
     backend::scraper::{self, check_login_error, parse_courses},
 };
 
@@ -95,7 +95,7 @@ impl NetworkClient {
         let courses_url = format!("{}/user/mycorona.html", BASE_URL);
         let mut last_report: Option<BatchSignUpReport> = None;
 
-        for i in 0..4 {
+        for i in 0..SIGNUP_ATTEMPTS {
             let attempt_num = (i + 1) as u32;
 
             let mut body = HashMap::new();

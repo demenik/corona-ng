@@ -5,7 +5,10 @@ mod ui;
 
 use crate::app::{App, BackendEvent, CurrentScreen, UiEvent};
 use crate::store::{Credentials, JsonScheduleStore, PersistentStore, SecureCredentialStore};
-use crate::ui::components::{Component, ComponentAction};
+use crate::ui::components::{
+    Component, ComponentAction,
+    signup_popup::{RequestDetail, RequestStatus, SignUpPopup},
+};
 
 use crossterm::event::KeyCode::{self, Char};
 use ratatui::DefaultTerminal;
@@ -104,14 +107,90 @@ fn run_ui(
                         "Anmeldung abgeschlossen: {} erfolgreich, {} fehlgeschlagen.",
                         report.total_success, report.total_failed
                     ));
+                    if let Some(popup) = &mut app.dashboard_screen.signup_popup {
+                        popup.is_finished = true;
+                        // Mark all requests as either Success or Failed based on the final general_error status
+                        for i in 0..5 {
+                            if popup.request_statuses[i] == RequestStatus::Waiting
+                                || popup.request_statuses[i] == RequestStatus::Running
+                            {
+                                popup.request_statuses[i] = if report.general_error.is_none() {
+                                    RequestStatus::Success
+                                } else {
+                                    RequestStatus::Failed
+                                };
+                            }
+                        }
+                    }
                     let _ = app.tx.try_send(UiEvent::FetchCourses);
                 }
                 BackendEvent::InternalMessage(msg) => {
                     app.dashboard_screen.set_status(msg);
                 }
-                BackendEvent::SignUpAttempt(_attempt, _report) => {
-                    // TODO: Update a live popup state
+                BackendEvent::SignUpAttempt(attempt, report) => {
+                    if let Some(popup) = &mut app.dashboard_screen.signup_popup {
+                        let idx = (attempt as usize).saturating_sub(1);
+                        if idx < 5 {
+                            // Mark previous as Success if they were running and this one is starting
+                            if idx > 0 && popup.request_statuses[idx - 1] == RequestStatus::Running
+                            {
+                                popup.request_statuses[idx - 1] = RequestStatus::Success;
+                            }
+
+                            // If this specific attempt failed with a general error, mark it Failed, otherwise Running
+                            popup.request_statuses[idx] = if report.general_error.is_some() {
+                                RequestStatus::Failed
+                            } else {
+                                RequestStatus::Running
+                            };
+
+                            // Update details with success/fail counts and local/server times
+                            let local_time =
+                                chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                            popup.request_details[idx] = Some(RequestDetail {
+                                success_count: report.total_success,
+                                failed_count: report.total_failed,
+                                local_time,
+                                server_time: report.server_time.clone(),
+                            });
+                        }
+                    }
                 }
+            }
+        }
+
+        // --- Auto-open Popup logic ---
+        if app.current_screen == CurrentScreen::Dashboard {
+            let mut target_to_open = None;
+            let mut course_ids = Vec::new();
+            let now = chrono::Local::now().time();
+
+            // Find nearest schedule that is within 10 seconds
+            for times in app.dashboard_screen.schedules.values() {
+                for time_str in times {
+                    if let Ok(target) = chrono::NaiveTime::parse_from_str(time_str, "%H:%M") {
+                        let diff = target.signed_duration_since(now);
+                        if diff.num_seconds() > 0 && diff.num_seconds() <= 10 {
+                            target_to_open = Some(time_str.clone());
+                            // Collect all course IDs for this target time
+                            for (c_id, c_times) in &app.dashboard_screen.schedules {
+                                if c_times.contains(time_str) {
+                                    course_ids.push(c_id.clone());
+                                }
+                            }
+                            break;
+                        }
+                    }
+                }
+                if target_to_open.is_some() {
+                    break;
+                }
+            }
+
+            if let Some(target) = target_to_open
+                && app.dashboard_screen.signup_popup.is_none()
+            {
+                app.dashboard_screen.signup_popup = Some(SignUpPopup::new(target, course_ids));
             }
         }
 

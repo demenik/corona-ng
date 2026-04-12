@@ -195,10 +195,13 @@ pub fn parse_sign_up_results(html: &str) -> BatchSignUpReport {
         }
     }
 
+    let server_time = get_server_time(html).map(|dt| dt.format("%H:%M:%S").to_string());
+
     BatchSignUpReport {
         details,
         total_success,
         total_failed,
         general_error: None,
+        server_time,
     }
 }

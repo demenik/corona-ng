@@ -5,6 +5,8 @@ use crate::app::CurrentScreen;
 
 pub mod dashboard_screen;
 pub mod login_screen;
+pub mod signup_popup;
+pub mod spinner;
 pub mod start_screen;
 pub mod time_input;
 
