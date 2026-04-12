@@ -7,7 +7,7 @@ use ratatui::{
 use std::collections::HashMap;
 
 use crate::{
-    app::{Course, CourseStatus},
+    app::{Course, CourseStatus, User},
     ui::components::{Component, signup_popup::SignUpPopup, time_input::TimeInput},
 };
 
@@ -28,7 +28,7 @@ pub struct DashboardScreen {
     selected_course_idx: usize,
 
     pub status_message: Option<String>,
-    pub username: Option<String>,
+    pub user: Option<User>,
     pub time_input: Option<TimeInput>,
     pub signup_popup: Option<SignUpPopup>,
 }
@@ -42,7 +42,7 @@ impl DashboardScreen {
             selected_course_idx: 0,
 
             status_message: None,
-            username: None,
+            user: None,
             time_input: None,
             signup_popup: None,
         }
@@ -184,9 +184,13 @@ impl Component for DashboardScreen {
             .split(main_layout[1]);
 
         // --- HEADER ---
+        let user_info = self.user.as_ref().map_or("Nutzer".to_string(), |u| {
+            format!("{} ({})", u.first_name, u.username)
+        });
+
         let header = Paragraph::new(format!(
-            "Hallo {}. Du hast {} geladene Kurse\n{}",
-            self.username.as_ref().unwrap_or(&"Nutzer".to_string()),
+            "Hallo {}. Du hast {} beobachtete Kurse.\n{}",
+            user_info,
             self.courses.as_ref().map_or(0, |c| c.len()),
             self.status_message.clone().unwrap_or("".to_string())
         ))

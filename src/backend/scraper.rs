@@ -2,7 +2,9 @@ use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 
-use crate::app::{BatchSignUpReport, Course, CourseSignUpResult, CourseStatus, SignUpOutcome};
+use crate::app::{
+    BatchSignUpReport, Course, CourseSignUpResult, CourseStatus, SignUpOutcome, User,
+};
 
 pub fn parse_courses(html: &str) -> Vec<Course> {
     let document = Html::parse_document(html);
@@ -75,7 +77,68 @@ pub fn parse_courses(html: &str) -> Vec<Course> {
     courses
 }
 
-pub fn check_login_error(html: &str) -> Option<String> {
+pub fn parse_user(html: &str) -> Option<User> {
+    let document = Html::parse_document(html);
+
+    let direct_li_selector = Selector::parse("ul.anmeldung > li").unwrap();
+    let inner_li_selector = Selector::parse("ul > li").unwrap();
+    let b_selector = Selector::parse("b").unwrap();
+
+    let mut username = String::new();
+    let mut first_name = String::new();
+    let mut last_name = String::new();
+    let mut studiengang = Vec::new();
+    let mut number = String::new();
+
+    for li in document.select(&direct_li_selector) {
+        let full_text = li.text().collect::<String>().trim().to_string();
+
+        if full_text.starts_with("Studiengang:") {
+            for inner_li in li.select(&inner_li_selector) {
+                let text = inner_li.text().collect::<String>().trim().to_string();
+                if !text.is_empty() {
+                    studiengang.push(text);
+                }
+            }
+        } else if full_text.starts_with("Matrikelnummer:") {
+            let parts: Vec<&str> = full_text.split(':').collect();
+            if parts.len() == 2 {
+                number = parts[1].trim().to_string();
+            }
+        } else if full_text.contains(':') && !full_text.contains("Abmelden") {
+            let parts: Vec<&str> = full_text.splitn(2, ':').collect();
+            if parts.len() == 2 {
+                username = parts[0].trim().to_string();
+
+                let b_tags: Vec<_> = li.select(&b_selector).collect();
+                if b_tags.len() >= 2 {
+                    first_name = b_tags[0].text().collect::<String>().trim().to_string();
+                    last_name = b_tags[1].text().collect::<String>().trim().to_string();
+                } else {
+                    let names: Vec<&str> = parts[1].trim().split_whitespace().collect();
+                    if names.len() >= 2 {
+                        first_name = names[0].to_string();
+                        last_name = names[1..].join(" ");
+                    }
+                }
+            }
+        }
+    }
+
+    if !username.is_empty() {
+        Some(User {
+            username,
+            first_name,
+            last_name,
+            studiengang,
+            number,
+        })
+    } else {
+        None
+    }
+}
+
+pub fn check_login_error(html: &str) -> Result<User, String> {
     let document = Html::parse_document(html);
 
     let error_sel = Selector::parse("span.Error").unwrap();
@@ -87,15 +150,15 @@ pub fn check_login_error(html: &str) -> Option<String> {
             .trim()
             .to_string();
 
-        return Some(error_msg);
+        return Err(error_msg);
     }
 
     let form_sel = Selector::parse("form#IndexForm").unwrap();
     if document.select(&form_sel).next().is_some() {
-        return Some("Unknown Login Error".to_string());
+        return Err("Unknown Login Error".to_string());
     }
 
-    None
+    Ok(parse_user(html).unwrap())
 }
 
 fn parse_german_month(month: &str) -> Option<&str> {

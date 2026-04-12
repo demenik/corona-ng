@@ -16,6 +16,15 @@ pub enum CurrentScreen {
 }
 
 #[derive(Debug, Clone, PartialEq)]
+pub struct User {
+    pub username: String,
+    pub first_name: String,
+    pub last_name: String,
+    pub studiengang: Vec<String>,
+    pub number: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
 pub enum CourseStatus {
     Open,
     Closed,
@@ -80,7 +89,7 @@ pub enum UiEvent {
 
 pub enum BackendEvent {
     ClockTick(String),
-    LoginSuccess,
+    LoginSuccess(User),
     LoginFailed(String),
     CoursesUpdate(Vec<Course>),
     FetchFailed(String),

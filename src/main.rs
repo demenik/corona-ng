@@ -76,10 +76,10 @@ fn run_ui(
         while let Ok(msg) = backend_rx.try_recv() {
             match msg {
                 BackendEvent::ClockTick(time) => app.clock = time,
-                BackendEvent::LoginSuccess => {
+                BackendEvent::LoginSuccess(user) => {
                     app.login_screen.is_loading = false;
                     let _ = app.tx.try_send(UiEvent::FetchCourses);
-                    app.dashboard_screen.username = Some(app.login_screen.username.clone());
+                    app.dashboard_screen.user = Some(user);
                     app.current_screen = CurrentScreen::Dashboard;
 
                     if let Some(creds) = &app.last_credentials {
@@ -289,7 +289,7 @@ fn run_ui(
                         app.current_screen = CurrentScreen::Start;
                         app.login_screen.status_message = None;
                         app.login_screen.is_loading = false;
-                        app.dashboard_screen.username = None;
+                        app.dashboard_screen.user = None;
                     }
                     ComponentAction::CoursesFetch => {
                         app.dashboard_screen

@@ -37,11 +37,13 @@ impl NetworkClient {
         match self.client.post(login_url).form(&body).send().await {
             Ok(response) if response.status().is_success() => match response.text().await {
                 Ok(html) => {
-                    let err = check_login_error(&html);
-                    if let Some(msg) = err {
+                    let result = check_login_error(&html);
+                    if let Err(msg) = result {
                         let _ = tx.send(BackendEvent::LoginFailed(msg)).await;
                     } else {
-                        let _ = tx.send(BackendEvent::LoginSuccess).await;
+                        let _ = tx
+                            .send(BackendEvent::LoginSuccess(result.ok().unwrap()))
+                            .await;
                     }
                 }
                 Err(e) => {

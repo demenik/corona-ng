@@ -17,7 +17,7 @@ enum LoginField {
 }
 
 pub struct LoginScreen {
-    pub username: String,
+    username: String,
     password: String,
     show_password: bool,
     focused_field: LoginField,
