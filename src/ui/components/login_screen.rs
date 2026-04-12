@@ -41,6 +41,14 @@ impl LoginScreen {
         self.status_message = Some(msg);
         self.is_loading = false;
     }
+
+    pub fn prefill(&mut self, user: String, pass: String) {
+        self.username = user;
+        self.password = pass;
+        if !self.username.is_empty() && !self.password.is_empty() {
+            self.focused_field = LoginField::LoginBtn;
+        }
+    }
 }
 
 impl Default for LoginScreen {

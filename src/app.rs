@@ -1,5 +1,8 @@
-use crate::ui::components::{
-    dashboard_screen::DashboardScreen, login_screen::LoginScreen, start_screen::StartScreen,
+use crate::{
+    store::Credentials,
+    ui::components::{
+        dashboard_screen::DashboardScreen, login_screen::LoginScreen, start_screen::StartScreen,
+    },
 };
 use tokio::sync::mpsc;
 
@@ -54,6 +57,7 @@ pub struct App {
     pub clock: String,
     pub is_logged_in: bool,
     pub login_error: Option<String>,
+    pub last_credentials: Option<Credentials>,
 
     pub tx: mpsc::Sender<UiEvent>,
 }
@@ -69,6 +73,7 @@ impl App {
             clock: "00:00:00.000".to_string(),
             is_logged_in: false,
             login_error: None,
+            last_credentials: None,
 
             tx,
         }
