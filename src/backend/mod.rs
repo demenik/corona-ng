@@ -39,6 +39,9 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                     UiEvent::SetSchedule(course_id, time) => {
                         state.schedule.insert(course_id, vec![time]);
                     }
+                    UiEvent::DeleteSchedule(course_id) => {
+                        state.schedule.remove(&course_id);
+                    }
                     UiEvent::Quit => break,
                 }
             }

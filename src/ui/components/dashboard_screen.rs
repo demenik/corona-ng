@@ -127,6 +127,13 @@ impl Component for DashboardScreen {
                 DashboardFocus::ReloadBtn => self.focus = DashboardFocus::LogoutBtn,
                 _ => (),
             },
+            KeyCode::Char('x') if self.focus == DashboardFocus::CourseList => {
+                if let Some(courses) = &self.courses
+                    && let Some(course) = courses.get(self.selected_course_idx)
+                {
+                    return Some(ComponentAction::DeleteSchedule(course.id.clone()));
+                }
+            }
             KeyCode::Enter => match self.focus {
                 DashboardFocus::ReloadBtn => return Some(ComponentAction::CoursesFetch),
                 DashboardFocus::LogoutBtn => return Some(ComponentAction::Logout),
@@ -187,7 +194,7 @@ impl Component for DashboardScreen {
         };
         let course_block = Block::default()
             .borders(Borders::ALL)
-            .title(" Kurse (↕ Navigieren, Enter für Popup) ")
+            .title(" Kurse (↕: Navigieren, Enter: Zeit setzen, x: Zeit löschen) ")
             .border_style(course_border_style);
 
         let rows: Vec<Row> = if let Some(courses) = &self.courses {

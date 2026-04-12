@@ -20,5 +20,6 @@ pub enum ComponentAction {
     Logout,
     CoursesFetch,
     SetSchedule(String, String),
+    DeleteSchedule(String),
     Quit,
 }

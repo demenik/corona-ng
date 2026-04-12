@@ -37,6 +37,7 @@ pub enum UiEvent {
     Logout,
     FetchCourses,
     SetSchedule(String, String),
+    DeleteSchedule(String),
     Quit,
 }
 

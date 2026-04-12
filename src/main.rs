@@ -159,6 +159,11 @@ fn run_ui(
                         let _ = schedule_store.save(&app.dashboard_screen.schedules);
                         let _ = app.tx.try_send(UiEvent::SetSchedule(course_id, time));
                     }
+                    ComponentAction::DeleteSchedule(course_id) => {
+                        app.dashboard_screen.schedules.remove(&course_id);
+                        let _ = schedule_store.save(&app.dashboard_screen.schedules);
+                        let _ = app.tx.try_send(UiEvent::DeleteSchedule(course_id));
+                    }
                     ComponentAction::Quit => return Ok(()),
                 }
             }
