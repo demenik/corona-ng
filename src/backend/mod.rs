@@ -36,6 +36,9 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                     UiEvent::FetchCourses => {
                         state.network.get_courses(backend_tx.clone()).await;
                     }
+                    UiEvent::SetSchedule(course_id, time) => {
+                        state.schedule.entry(course_id).or_default().push(time);
+                    }
                     UiEvent::Quit => break,
                 }
             }

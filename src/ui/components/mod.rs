@@ -6,6 +6,7 @@ use crate::app::CurrentScreen;
 pub mod dashboard_screen;
 pub mod login_screen;
 pub mod start_screen;
+pub mod time_input;
 
 pub trait Component {
     fn handle_key(&mut self, key: KeyEvent) -> Option<ComponentAction>;
@@ -18,5 +19,6 @@ pub enum ComponentAction {
     TriggerLogin(String, String),
     Logout,
     CoursesFetch,
+    SetSchedule(String, String),
     Quit,
 }

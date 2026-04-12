@@ -105,11 +105,21 @@ fn run_ui(
                             .set_status("Kurse werden aktualisiert...".to_string());
                         let _ = app.tx.try_send(UiEvent::FetchCourses);
                     }
+                    ComponentAction::SetSchedule(course_id, time) => {
+                        app.dashboard_screen
+                            .schedules
+                            .entry(course_id.clone())
+                            .or_default()
+                            .push(time.clone());
+                        let _ = app.tx.try_send(UiEvent::SetSchedule(course_id, time));
+                    }
                     ComponentAction::Quit => return Ok(()),
                 }
             }
 
-            if key.code == KeyCode::Esc && !matches!(app.current_screen, CurrentScreen::Start) {
+            if key.code == KeyCode::Esc
+                && let CurrentScreen::Login = app.current_screen
+            {
                 app.current_screen = CurrentScreen::Start;
             }
         }

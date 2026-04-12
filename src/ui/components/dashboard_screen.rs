@@ -4,10 +4,11 @@ use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Paragraph, Row, Table},
 };
+use std::collections::HashMap;
 
 use crate::{
     app::{Course, CourseStatus},
-    ui::components::Component,
+    ui::components::{Component, time_input::TimeInput},
 };
 
 use super::ComponentAction;
@@ -22,22 +23,26 @@ enum DashboardFocus {
 
 pub struct DashboardScreen {
     pub courses: Option<Vec<Course>>,
+    pub schedules: HashMap<String, Vec<String>>,
     focus: DashboardFocus,
     selected_course_idx: usize,
 
     pub status_message: Option<String>,
     pub username: Option<String>,
+    pub time_input: Option<TimeInput>,
 }
 
 impl DashboardScreen {
     pub fn new() -> Self {
         Self {
             courses: None,
+            schedules: HashMap::new(),
             focus: DashboardFocus::CourseList,
             selected_course_idx: 0,
 
             status_message: None,
             username: None,
+            time_input: None,
         }
     }
 
@@ -73,6 +78,18 @@ impl Default for DashboardScreen {
 
 impl Component for DashboardScreen {
     fn handle_key(&mut self, key: KeyEvent) -> Option<ComponentAction> {
+        if let Some(time_input) = &mut self.time_input {
+            if key.code == KeyCode::Esc {
+                self.time_input = None;
+                return None;
+            }
+            let action = time_input.handle_key(key);
+            if matches!(action, Some(ComponentAction::SetSchedule(_, _))) {
+                self.time_input = None;
+            }
+            return action;
+        }
+
         let course_count = self.courses.as_ref().map_or(0, |c| c.len());
 
         match key.code {
@@ -110,20 +127,24 @@ impl Component for DashboardScreen {
                 DashboardFocus::ReloadBtn => self.focus = DashboardFocus::LogoutBtn,
                 _ => (),
             },
-            KeyCode::Enter => {
-                match self.focus {
-                    DashboardFocus::ReloadBtn => return Some(ComponentAction::CoursesFetch),
-                    DashboardFocus::LogoutBtn => return Some(ComponentAction::Logout),
-                    DashboardFocus::CourseList => {
-                        if let Some(courses) = &self.courses
-                            && let Some(course) = courses.get(self.selected_course_idx)
-                        {
-                            // TODO: return Some(ComponentAction::OpenTimePopup(course.id.clone()));
+            KeyCode::Enter => match self.focus {
+                DashboardFocus::ReloadBtn => return Some(ComponentAction::CoursesFetch),
+                DashboardFocus::LogoutBtn => return Some(ComponentAction::Logout),
+                DashboardFocus::CourseList => {
+                    if let Some(courses) = &self.courses {
+                        if let Some(course) = courses.get(self.selected_course_idx) {
+                            let last_time = self
+                                .schedules
+                                .get(&course.id)
+                                .and_then(|v| v.last())
+                                .map(|s| s.as_str());
+                            self.time_input = Some(TimeInput::new(course.id.clone(), last_time));
                         }
                     }
-                    _ => {}
                 }
-            }
+
+                _ => {}
+            },
             _ => {}
         }
         None
@@ -317,5 +338,9 @@ impl Component for DashboardScreen {
                 .block(Block::default().borders(Borders::ALL).style(logout_style)),
             sidebar_chunks[3],
         );
+
+        if let Some(time_input) = &self.time_input {
+            time_input.draw(f, area);
+        }
     }
 }
