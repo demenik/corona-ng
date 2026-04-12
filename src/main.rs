@@ -86,7 +86,7 @@ fn run_ui(
                         match credential_store.save(creds) {
                             Ok(_) => app
                                 .dashboard_screen
-                                .set_status("Vorherige Anmeldedaten gespeichert.".to_string()),
+                                .set_status("Anmeldedaten gespeichert.".to_string()),
                             Err(e) => app
                                 .dashboard_screen
                                 .set_status(format!("Konnte Login nicht speichern: {}", e)),
