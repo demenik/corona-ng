@@ -1,4 +1,5 @@
 mod app;
+mod backend;
 mod ui;
 
 use crate::app::{App, BackendEvent, CurrentScreen, UiEvent};
@@ -17,18 +18,7 @@ async fn main() -> io::Result<()> {
     let mut app = App::new(ui_tx);
 
     tokio::spawn(async move {
-        loop {
-            if let Ok(event) = ui_rx.try_recv()
-                && let UiEvent::Quit = event
-            {
-                break;
-            }
-
-            let now = chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-            let _ = backend_tx.send(BackendEvent::ClockTick(now)).await;
-
-            tokio::time::sleep(Duration::from_millis(10)).await;
-        }
+        backend::run(ui_rx, backend_tx).await;
     });
 
     let mut terminal = ratatui::init();
