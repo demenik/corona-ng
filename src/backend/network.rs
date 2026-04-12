@@ -3,7 +3,10 @@ use std::sync::Arc;
 use reqwest::{Client, cookie::Jar, multipart};
 use tokio::sync::mpsc;
 
-use crate::{app::BackendEvent, backend::scraper::parse_courses};
+use crate::{
+    app::BackendEvent,
+    backend::scraper::{check_login_error, parse_courses},
+};
 
 pub struct NetworkClient {
     client: Client,
@@ -31,9 +34,24 @@ impl NetworkClient {
             .text("password", pass.to_string());
 
         match self.client.post(login_url).multipart(form).send().await {
-            Ok(response) if response.status().is_success() => {
-                let _ = tx.send(BackendEvent::LoginSuccess).await;
-            }
+            Ok(response) if response.status().is_success() => match response.text().await {
+                Ok(html) => {
+                    let err = check_login_error(&html);
+                    if let Some(msg) = err {
+                        let _ = tx.send(BackendEvent::LoginFailed(msg)).await;
+                    } else {
+                        let _ = tx.send(BackendEvent::LoginSuccess).await;
+                    }
+                }
+                Err(e) => {
+                    let _ = tx
+                        .send(BackendEvent::LoginFailed(format!(
+                            "Failed to read response body: {}",
+                            e
+                        )))
+                        .await;
+                }
+            },
             Ok(response) => {
                 let err = format!("Server antwortete mit Status: {}", response.status());
                 let _ = tx.send(BackendEvent::LoginFailed(err)).await;

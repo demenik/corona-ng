@@ -74,3 +74,26 @@ pub fn parse_courses(html: &str) -> Vec<Course> {
 
     courses
 }
+
+pub fn check_login_error(html: &str) -> Option<String> {
+    let document = Html::parse_document(html);
+
+    let error_sel = Selector::parse("span.Error").unwrap();
+    if let Some(error_el) = document.select(&error_sel).next() {
+        let error_msg = error_el
+            .text()
+            .collect::<Vec<_>>()
+            .join(" ")
+            .trim()
+            .to_string();
+
+        return Some(error_msg);
+    }
+
+    let form_sel = Selector::parse("form#IndexForm").unwrap();
+    if document.select(&form_sel).next().is_some() {
+        return Some("Unknown Login Error".to_string());
+    }
+
+    None
+}
