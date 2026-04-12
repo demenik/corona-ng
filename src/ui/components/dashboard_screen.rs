@@ -203,6 +203,17 @@ impl Component for DashboardScreen {
                     Row::new(vec![
                         Cell::from(course.name.clone()),
                         Cell::from(status_str),
+                        Cell::from(
+                            Text::from(course.observations.to_string())
+                                .alignment(HorizontalAlignment::Right),
+                        ),
+                        Cell::from(
+                            Text::from(format!(
+                                "{}/{}",
+                                course.participants, course.max_participants
+                            ))
+                            .alignment(HorizontalAlignment::Right),
+                        ),
                         Cell::from(ratatui::text::Span::styled("[ Zeit setzen ]", btn_style)),
                     ])
                     .style(row_style)
@@ -217,12 +228,14 @@ impl Component for DashboardScreen {
             [
                 Constraint::Fill(1),
                 Constraint::Length(11),
+                Constraint::Length(10),
+                Constraint::Length(11),
                 Constraint::Length(15),
             ],
         )
         .block(course_block)
         .header(
-            Row::new(vec!["Name", "Status", "Aktion"])
+            Row::new(vec!["Name", "Status", "Beobachter", "Teilnehmer", "Aktion"])
                 .style(Style::default().add_modifier(Modifier::UNDERLINED)),
         );
 
