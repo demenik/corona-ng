@@ -6,7 +6,7 @@ use crate::{
 };
 use tokio::sync::mpsc;
 
-pub const SIGNUP_ATTEMPTS: usize = 5;
+pub const SIGNUP_ATTEMPTS: usize = 10;
 
 #[derive(PartialEq)]
 pub enum CurrentScreen {

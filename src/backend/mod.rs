@@ -82,7 +82,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                         let diff = target_dt_with_offset.signed_duration_since(now_naive);
 
                         // Trigger 200ms before target
-                        if diff.num_milliseconds() <= 200 && diff.num_milliseconds() > -5000 {
+                        if diff.num_milliseconds() <= 500 && diff.num_milliseconds() > -5000 {
                             state.triggered_schedules.insert((today, target_time.clone()));
 
                             let _ = backend_tx.send(BackendEvent::InternalMessage(format!("Anmeldung für {} gestartet!", target_time))).await;
