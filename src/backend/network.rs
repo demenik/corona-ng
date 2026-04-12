@@ -1,6 +1,6 @@
 use std::{collections::HashMap, sync::Arc};
 
-use reqwest::{Client, Response, cookie::Jar, multipart};
+use reqwest::{Client, Response, cookie::Jar};
 use tokio::sync::mpsc;
 
 use crate::{
@@ -30,11 +30,11 @@ impl NetworkClient {
 
     pub async fn login(&self, user: &str, pass: &str, tx: mpsc::Sender<BackendEvent>) {
         let login_url = format!("{}/index.html", BASE_URL);
-        let form = multipart::Form::new()
-            .text("uid", user.to_string())
-            .text("password", pass.to_string());
+        let mut body = HashMap::new();
+        body.insert("uid", user);
+        body.insert("password", pass);
 
-        match self.client.post(login_url).multipart(form).send().await {
+        match self.client.post(login_url).form(&body).send().await {
             Ok(response) if response.status().is_success() => match response.text().await {
                 Ok(html) => {
                     let err = check_login_error(&html);
