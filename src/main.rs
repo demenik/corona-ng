@@ -2,7 +2,7 @@ mod app;
 mod ui;
 
 use crate::app::{App, BackendEvent, CurrentScreen, UiEvent};
-use crate::ui::components::start_screen::StartScreenAction;
+use crate::ui::components::{Component, ComponentAction};
 
 use crossterm::event::KeyCode::{self, Char};
 use ratatui::DefaultTerminal;
@@ -76,29 +76,24 @@ fn run_ui(
                 return Ok(());
             }
 
-            match app.current_screen {
-                CurrentScreen::Start => {
-                    let action = app.start_screen.handle_key(key);
-                    match action {
-                        StartScreenAction::Login => app.current_screen = CurrentScreen::Login,
-                        StartScreenAction::OpenWeb => {
-                            let url = "https://campusonline.uni-ulm.de/CoronaNG/index.html";
-                            if let Err(e) = open::that(url) {
-                                eprintln!("Error while opening in the browser: {}", e);
-                            }
-                        }
-                        StartScreenAction::Quit => {
-                            let _ = app.tx.try_send(UiEvent::Quit);
-                            return Ok(());
-                        }
-                        StartScreenAction::None => {}
+            let action = match app.current_screen {
+                CurrentScreen::Start => app.start_screen.handle_key(key),
+                CurrentScreen::Login => None,
+                CurrentScreen::Dashboard => None,
+            };
+
+            if let Some(act) = action {
+                match act {
+                    ComponentAction::ChangeScreen(new_screen) => app.current_screen = new_screen,
+                    ComponentAction::TriggerLogin(user, pass) => {
+                        let _ = app.tx.try_send(UiEvent::Login(user, pass));
                     }
+                    ComponentAction::Quit => return Ok(()),
                 }
-                CurrentScreen::Login | CurrentScreen::Dashboard => {
-                    if key.code == KeyCode::Esc {
-                        app.current_screen = CurrentScreen::Start;
-                    }
-                }
+            }
+
+            if key.code == KeyCode::Esc && !matches!(app.current_screen, CurrentScreen::Start) {
+                app.current_screen = CurrentScreen::Start;
             }
         }
 

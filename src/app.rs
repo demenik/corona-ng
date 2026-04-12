@@ -8,7 +8,7 @@ pub enum CurrentScreen {
 }
 
 pub enum UiEvent {
-    Login(String),
+    Login(String, String),
     Quit,
 }
 

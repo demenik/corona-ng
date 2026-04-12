@@ -1,6 +1,9 @@
 pub mod components;
 
-use crate::app::{App, CurrentScreen};
+use crate::{
+    app::{App, CurrentScreen},
+    ui::components::Component,
+};
 use ratatui::prelude::*;
 
 pub fn draw(f: &mut Frame, app: &mut App) {

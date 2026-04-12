@@ -4,12 +4,10 @@ use ratatui::{
     widgets::{Block, Borders, Paragraph},
 };
 
-pub enum StartScreenAction {
-    None,
-    Login,
-    OpenWeb,
-    Quit,
-}
+use crate::{
+    app::CurrentScreen,
+    ui::components::{Component, ComponentAction},
+};
 
 pub struct StartScreen {
     selected_index: usize,
@@ -23,8 +21,16 @@ impl StartScreen {
             buttons: vec!["Login", "Webseite öffnen", "Verlassen"],
         }
     }
+}
 
-    pub fn handle_key(&mut self, key: KeyEvent) -> StartScreenAction {
+impl Default for StartScreen {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
+impl Component for StartScreen {
+    fn handle_key(&mut self, key: KeyEvent) -> Option<ComponentAction> {
         match key.code {
             KeyCode::Up => {
                 if self.selected_index > 0 {
@@ -32,7 +38,7 @@ impl StartScreen {
                 } else {
                     self.selected_index = self.buttons.len() - 1;
                 }
-                StartScreenAction::None
+                None
             }
             KeyCode::Down => {
                 if self.selected_index < self.buttons.len() - 1 {
@@ -40,19 +46,22 @@ impl StartScreen {
                 } else {
                     self.selected_index = 0;
                 }
-                StartScreenAction::None
+                None
             }
             KeyCode::Enter => match self.selected_index {
-                0 => StartScreenAction::Login,
-                1 => StartScreenAction::OpenWeb,
-                2 => StartScreenAction::Quit,
-                _ => StartScreenAction::None,
+                0 => Some(ComponentAction::ChangeScreen(CurrentScreen::Login)),
+                1 => {
+                    let _ = open::that("https://campusonline.uni-ulm.de/CoronaNG/index.html");
+                    None
+                }
+                2 => Some(ComponentAction::Quit),
+                _ => None,
             },
-            _ => StartScreenAction::None,
+            _ => None,
         }
     }
 
-    pub fn draw(&self, f: &mut Frame, area: Rect) {
+    fn draw(&self, f: &mut Frame, area: Rect) {
         let vertical_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
@@ -139,11 +148,5 @@ impl StartScreen {
 
             f.render_widget(button, button_areas[i]);
         }
-    }
-}
-
-impl Default for StartScreen {
-    fn default() -> Self {
-        Self::new()
     }
 }
