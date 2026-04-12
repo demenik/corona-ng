@@ -131,15 +131,15 @@ impl Component for DashboardScreen {
                 DashboardFocus::ReloadBtn => return Some(ComponentAction::CoursesFetch),
                 DashboardFocus::LogoutBtn => return Some(ComponentAction::Logout),
                 DashboardFocus::CourseList => {
-                    if let Some(courses) = &self.courses {
-                        if let Some(course) = courses.get(self.selected_course_idx) {
-                            let last_time = self
-                                .schedules
-                                .get(&course.id)
-                                .and_then(|v| v.last())
-                                .map(|s| s.as_str());
-                            self.time_input = Some(TimeInput::new(course.id.clone(), last_time));
-                        }
+                    if let Some(courses) = &self.courses
+                        && let Some(course) = courses.get(self.selected_course_idx)
+                    {
+                        let last_time = self
+                            .schedules
+                            .get(&course.id)
+                            .and_then(|v| v.last())
+                            .map(|s| s.as_str());
+                        self.time_input = Some(TimeInput::new(course.id.clone(), last_time));
                     }
                 }
 
