@@ -259,6 +259,10 @@ fn run_ui(
         if crossterm::event::poll(timeout)?
             && let crossterm::event::Event::Key(key) = crossterm::event::read()?
         {
+            if key.kind != crossterm::event::KeyEventKind::Press {
+                continue;
+            }
+
             if key.code == Char('c')
                 && key
                     .modifiers
