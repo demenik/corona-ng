@@ -1,12 +1,23 @@
-use std::{collections::HashMap, sync::Arc};
+use std::{collections::HashMap, sync::Arc, time::Instant};
 
-use reqwest::{Client, Response, cookie::Jar};
+use chrono::{DateTime, Duration, Utc};
+use reqwest::{Client, Method, Response, cookie::Jar, header::DATE};
 use tokio::sync::mpsc;
 
 use crate::{
     app::{BackendEvent, BatchSignUpReport, SIGNUP_ATTEMPTS},
-    backend::scraper::{self, check_login_error, parse_courses},
+    backend::{
+        clock::{OffsetEstimate, OffsetSample},
+        scraper::{self, check_login_error, parse_courses},
+    },
 };
+
+/// Default number of requests used by [`NetworkClient::measure_offset`]
+pub const CLOCK_SAMPLES: usize = 8;
+
+/// Pause between clock samples. Not a divisor of 1s, so samples land at
+/// different sub-second phases of the server clock
+const CLOCK_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
 
 #[derive(Clone)]
 pub struct NetworkClient {
@@ -63,6 +74,68 @@ impl NetworkClient {
                 let _ = tx.send(BackendEvent::LoginFailed(e.to_string())).await;
             }
         }
+    }
+
+    /// Estimate the server clock offset from the `Date` header of `n` requests.
+    /// Uses `HEAD` and switches to `GET` if `HEAD` fails
+    pub async fn measure_offset(&self, n: usize) -> Result<OffsetEstimate, String> {
+        let url = format!("{}/index.html", BASE_URL);
+        let mut method = Method::HEAD;
+        let mut samples = Vec::with_capacity(n);
+        let mut last_err = None;
+
+        for i in 0..n {
+            if i > 0 {
+                tokio::time::sleep(CLOCK_SAMPLE_INTERVAL).await;
+            }
+
+            let result = match self.sample_offset(&url, method.clone()).await {
+                Err(_) if method == Method::HEAD => {
+                    method = Method::GET;
+                    self.sample_offset(&url, Method::GET).await
+                }
+                result => result,
+            };
+
+            match result {
+                Ok(sample) => samples.push(sample),
+                Err(e) => last_err = Some(e),
+            }
+        }
+
+        OffsetEstimate::from_samples(samples).ok_or_else(|| {
+            format!(
+                "Serverzeit konnte nicht bestimmt werden: {}",
+                last_err.unwrap_or_else(|| "keine Messungen".to_string())
+            )
+        })
+    }
+
+    async fn sample_offset(&self, url: &str, method: Method) -> Result<OffsetSample, String> {
+        let t0 = Utc::now();
+        let start = Instant::now();
+        let response = self
+            .client
+            .request(method, url)
+            .send()
+            .await
+            .map_err(|e| e.to_string())?;
+        let rtt = Duration::from_std(start.elapsed()).map_err(|e| e.to_string())?;
+
+        let date = response
+            .headers()
+            .get(DATE)
+            .ok_or("Date-Header fehlt")?
+            .to_str()
+            .map_err(|e| e.to_string())?;
+        let server_time = DateTime::parse_from_rfc2822(date)
+            .map_err(|e| format!("Ungültiger Date-Header '{}': {}", date, e))?
+            .with_timezone(&Utc);
+
+        // The header truncates to whole seconds, so the true time is on average 500ms later
+        let offset = server_time + Duration::milliseconds(500) - (t0 + rtt / 2);
+
+        Ok(OffsetSample { offset, rtt })
     }
 
     pub async fn get_courses(&self, tx: mpsc::Sender<BackendEvent>) {
