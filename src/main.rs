@@ -112,8 +112,14 @@ fn run_ui(
                 }
                 BackendEvent::CoursesUpdate(courses) => {
                     app.dashboard_screen.courses = Some(courses);
+                    if app.dashboard_screen.courses_refreshing {
+                        app.dashboard_screen.courses_refreshing = false;
+                        app.dashboard_screen
+                            .set_status("Kurse aktualisiert.".to_string());
+                    }
                 }
                 BackendEvent::FetchFailed(err) => {
+                    app.dashboard_screen.courses_refreshing = false;
                     app.dashboard_screen.set_status(format!("Fehler: {}", err));
                 }
                 BackendEvent::SignUpResult(report) => {
@@ -310,6 +316,7 @@ fn run_ui(
                         app.dashboard_screen.user = None;
                     }
                     ComponentAction::CoursesFetch => {
+                        app.dashboard_screen.courses_refreshing = true;
                         app.dashboard_screen
                             .set_status("Kurse werden aktualisiert...".to_string());
                         let _ = app.tx.try_send(UiEvent::FetchCourses);

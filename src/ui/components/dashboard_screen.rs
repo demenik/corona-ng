@@ -33,6 +33,8 @@ pub struct DashboardScreen {
     pub signup_popup: Option<SignUpPopup>,
     /// Last measured `(offset_ms, uncertainty_ms)` of the server clock
     pub clock_sync: Option<(i64, i64)>,
+    /// A manual course reload is waiting for its result
+    pub courses_refreshing: bool,
 }
 
 impl DashboardScreen {
@@ -48,6 +50,7 @@ impl DashboardScreen {
             time_input: None,
             signup_popup: None,
             clock_sync: None,
+            courses_refreshing: false,
         }
     }
 
