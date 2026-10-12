@@ -1,4 +1,4 @@
-use chrono::{Local, NaiveTime};
+use chrono::NaiveTime;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     prelude::*,
@@ -31,6 +31,10 @@ pub struct DashboardScreen {
     pub user: Option<User>,
     pub time_input: Option<TimeInput>,
     pub signup_popup: Option<SignUpPopup>,
+    /// Last measured `(offset_ms, uncertainty_ms)` of the server clock
+    pub clock_sync: Option<(i64, i64)>,
+    /// A manual course reload is waiting for its result
+    pub courses_refreshing: bool,
 }
 
 impl DashboardScreen {
@@ -45,6 +49,8 @@ impl DashboardScreen {
             user: None,
             time_input: None,
             signup_popup: None,
+            clock_sync: None,
+            courses_refreshing: false,
         }
     }
 
@@ -53,7 +59,7 @@ impl DashboardScreen {
     }
 
     fn calculate_countdown(&self, target_time_str: &str) -> String {
-        let now = Local::now().time();
+        let now = crate::backend::clock::now().time();
         if let Ok(target) = NaiveTime::parse_from_str(target_time_str, "%H:%M") {
             let diff = target.signed_duration_since(now);
             if diff.num_seconds() <= 0 {
@@ -303,7 +309,7 @@ impl Component for DashboardScreen {
         let sidebar_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Live Clock
+                Constraint::Length(4), // Live Clock
                 Constraint::Min(0),    // Countdowns
                 Constraint::Length(3), // Reload Button
                 Constraint::Length(3), // Logout Button
@@ -311,11 +317,25 @@ impl Component for DashboardScreen {
             .split(body_layout[1]);
 
         // Live Clock
-        let now = Local::now().format("%H:%M:%S%.3f").to_string();
+        let clock = crate::backend::clock::get();
+        let now = format!(
+            "{} {:+.3}s",
+            chrono::Utc::now()
+                .with_timezone(&crate::backend::SERVER_TZ)
+                .format("%H:%M:%S%.3f"),
+            clock.offset.num_milliseconds() as f64 / 1000.0
+        );
+        let sync = match self.clock_sync {
+            Some((_, uncertainty_ms)) => format!("Server-Offset +/-{}ms", uncertainty_ms),
+            None => "nicht synchronisiert".to_string(),
+        };
         f.render_widget(
-            Paragraph::new(now)
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title(" Live Zeit ")),
+            Paragraph::new(vec![
+                Line::from(now),
+                Line::from(sync).style(Style::default().fg(Color::DarkGray)),
+            ])
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title(" Live Zeit ")),
             sidebar_chunks[0],
         );
 

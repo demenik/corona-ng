@@ -17,3 +17,4 @@ serde_json = "1.0.149"
 dirs = "6.0.0"
 keyring = { version = "3.6.3", features = ["linux-native"] }
 rpassword = "7.4.0"
+chrono-tz = "0.10.4"

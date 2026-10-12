@@ -1,4 +1,4 @@
-use chrono::{Local, Timelike};
+use chrono::Timelike;
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ratatui::{
     prelude::*,
@@ -23,11 +23,11 @@ impl TimeInput {
                 let m = parts[1].parse().unwrap_or(0);
                 (h, m)
             } else {
-                let now = Local::now();
+                let now = crate::backend::clock::now();
                 ((now.hour() + 1) % 24, 0)
             }
         } else {
-            let now = Local::now();
+            let now = crate::backend::clock::now();
             ((now.hour() + 1) % 24, 0)
         };
 

@@ -3,7 +3,9 @@ mod backend;
 mod store;
 mod ui;
 
-use crate::app::{App, BackendEvent, CurrentScreen, SIGNUP_ATTEMPTS, SignUpOutcome, UiEvent};
+use crate::app::{
+    App, BackendEvent, CLOCK_WARN_OFFSET_MS, CurrentScreen, SIGNUP_ATTEMPTS, SignUpOutcome, UiEvent,
+};
 use crate::store::{Credentials, JsonScheduleStore, PersistentStore, SecureCredentialStore};
 use crate::ui::components::{
     Component, ComponentAction,
@@ -76,6 +78,18 @@ fn run_ui(
         while let Ok(msg) = backend_rx.try_recv() {
             match msg {
                 BackendEvent::ClockTick(time) => app.clock = time,
+                BackendEvent::ClockSynced {
+                    offset_ms,
+                    uncertainty_ms,
+                } => {
+                    app.dashboard_screen.clock_sync = Some((offset_ms, uncertainty_ms));
+                    if offset_ms.abs() > CLOCK_WARN_OFFSET_MS {
+                        app.dashboard_screen.set_status(format!(
+                            "Warnung: Systemuhr weicht {:+.3}s von der Serverzeit ab.",
+                            offset_ms as f64 / 1000.0
+                        ));
+                    }
+                }
                 BackendEvent::LoginSuccess(user) => {
                     app.login_screen.is_loading = false;
                     let _ = app.tx.try_send(UiEvent::FetchCourses);
@@ -94,12 +108,22 @@ fn run_ui(
                     }
                 }
                 BackendEvent::LoginFailed(err) => {
+                    if app.current_screen == CurrentScreen::Dashboard {
+                        app.current_screen = CurrentScreen::Login;
+                        app.dashboard_screen.user = None;
+                    }
                     app.login_screen.set_status(format!("Fehler: {}", err));
                 }
                 BackendEvent::CoursesUpdate(courses) => {
                     app.dashboard_screen.courses = Some(courses);
+                    if app.dashboard_screen.courses_refreshing {
+                        app.dashboard_screen.courses_refreshing = false;
+                        app.dashboard_screen
+                            .set_status("Kurse aktualisiert.".to_string());
+                    }
                 }
                 BackendEvent::FetchFailed(err) => {
+                    app.dashboard_screen.courses_refreshing = false;
                     app.dashboard_screen.set_status(format!("Fehler: {}", err));
                 }
                 BackendEvent::SignUpResult(report) => {
@@ -126,11 +150,12 @@ fn run_ui(
                             }
                         }
 
-                        // Mark all requests as either Success or Failed based on the final general_error status
+                        // Mark running requests as either Success or Failed based on the final
+                        // general_error status. Waiting requests were never sent
                         for i in 0..SIGNUP_ATTEMPTS {
-                            if popup.request_statuses[i] == RequestStatus::Waiting
-                                || popup.request_statuses[i] == RequestStatus::Running
-                            {
+                            if popup.request_statuses[i] == RequestStatus::Waiting {
+                                popup.request_statuses[i] = RequestStatus::Skipped;
+                            } else if popup.request_statuses[i] == RequestStatus::Running {
                                 popup.request_statuses[i] = if report.general_error.is_none() {
                                     RequestStatus::Success
                                 } else {
@@ -151,7 +176,7 @@ fn run_ui(
                 BackendEvent::InternalMessage(msg) => {
                     app.dashboard_screen.set_status(msg);
                 }
-                BackendEvent::SignUpAttempt(attempt, report) => {
+                BackendEvent::SignUpAttempt(attempt, report, timing) => {
                     if let Some(popup) = &mut app.dashboard_screen.signup_popup {
                         let idx = (attempt as usize).saturating_sub(1);
                         if idx < SIGNUP_ATTEMPTS {
@@ -181,10 +206,6 @@ fn run_ui(
                                 RequestStatus::Running
                             };
 
-                            // Update details with success/fail counts and local/server times
-                            let local_time =
-                                chrono::Local::now().format("%H:%M:%S%.3f").to_string();
-
                             let mut errors = Vec::new();
                             if let Some(err) = &report.general_error {
                                 errors.push(err.clone());
@@ -203,7 +224,7 @@ fn run_ui(
                             popup.request_details[idx] = Some(RequestDetail {
                                 success_count: report.total_success,
                                 failed_count: report.total_failed,
-                                local_time,
+                                timing,
                                 server_time: report.server_time.clone(),
                                 errors,
                             });
@@ -217,7 +238,7 @@ fn run_ui(
         if app.current_screen == CurrentScreen::Dashboard {
             let mut target_to_open = None;
             let mut course_ids = Vec::new();
-            let now = chrono::Local::now().time();
+            let now = backend::clock::now().time();
 
             // Find nearest schedule that is within 10 seconds
             for times in app.dashboard_screen.schedules.values() {
@@ -296,6 +317,7 @@ fn run_ui(
                         app.dashboard_screen.user = None;
                     }
                     ComponentAction::CoursesFetch => {
+                        app.dashboard_screen.courses_refreshing = true;
                         app.dashboard_screen
                             .set_status("Kurse werden aktualisiert...".to_string());
                         let _ = app.tx.try_send(UiEvent::FetchCourses);

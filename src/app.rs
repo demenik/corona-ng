@@ -6,7 +6,11 @@ use crate::{
 };
 use tokio::sync::mpsc;
 
-pub const SIGNUP_ATTEMPTS: usize = 10;
+/// Burst requests plus sequential retries
+pub const SIGNUP_ATTEMPTS: usize = 7;
+
+/// Clock offsets above this hint at a broken system clock
+pub const CLOCK_WARN_OFFSET_MS: i64 = 1000;
 
 #[derive(PartialEq)]
 pub enum CurrentScreen {
@@ -78,6 +82,20 @@ impl BatchSignUpReport {
     }
 }
 
+/// Timing of one sign-up request in estimated server time, relative to the target.
+/// Negative values are before the target
+#[derive(Debug, Clone, Copy)]
+pub struct SignUpTiming {
+    /// Planned send time, `None` for sequential retries
+    pub planned: Option<chrono::Duration>,
+    /// Actual send time
+    pub sent: chrono::Duration,
+    /// Estimated arrival at the server: send time plus half the synced RTT
+    pub arrival: chrono::Duration,
+    /// Time the response was read
+    pub response: chrono::Duration,
+}
+
 pub enum UiEvent {
     Login(String, String),
     Logout,
@@ -89,12 +107,13 @@ pub enum UiEvent {
 
 pub enum BackendEvent {
     ClockTick(String),
+    ClockSynced { offset_ms: i64, uncertainty_ms: i64 },
     LoginSuccess(User),
     LoginFailed(String),
     CoursesUpdate(Vec<Course>),
     FetchFailed(String),
     SignUpResult(BatchSignUpReport),
-    SignUpAttempt(u32, BatchSignUpReport),
+    SignUpAttempt(u32, BatchSignUpReport, SignUpTiming),
     InternalMessage(String),
 }
 

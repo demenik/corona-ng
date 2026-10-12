@@ -1,10 +1,12 @@
-use chrono::{DateTime, Local, NaiveDateTime, TimeZone};
+use chrono::{DateTime, NaiveDateTime, TimeZone};
+use chrono_tz::Tz;
 use scraper::{Html, Selector};
 use std::collections::HashMap;
 
 use crate::app::{
     BatchSignUpReport, Course, CourseSignUpResult, CourseStatus, SignUpOutcome, User,
 };
+use crate::backend::SERVER_TZ;
 
 pub fn parse_courses(html: &str) -> Vec<Course> {
     let document = Html::parse_document(html);
@@ -179,7 +181,7 @@ fn parse_german_month(month: &str) -> Option<&str> {
     }
 }
 
-pub fn get_server_time(html: &str) -> Option<DateTime<Local>> {
+pub fn get_server_time(html: &str) -> Option<DateTime<Tz>> {
     let document = Html::parse_document(html);
     let selector = Selector::parse("#mblock_innen").unwrap();
 
@@ -210,7 +212,7 @@ pub fn get_server_time(html: &str) -> Option<DateTime<Local>> {
 
     NaiveDateTime::parse_from_str(&datetime_str, "%Y-%m-%dT%H:%M:%S")
         .ok()
-        .and_then(|naive| Local.from_local_datetime(&naive).single())
+        .and_then(|naive| SERVER_TZ.from_local_datetime(&naive).earliest())
 }
 
 pub fn parse_sign_up_results(

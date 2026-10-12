@@ -1,6 +1,6 @@
-use crate::app::{Course, CourseStatus, SIGNUP_ATTEMPTS};
+use crate::app::{Course, CourseStatus, SIGNUP_ATTEMPTS, SignUpTiming};
 use crate::ui::components::spinner::Spinner;
-use chrono::{Local, NaiveTime};
+use chrono::NaiveTime;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table},
@@ -13,12 +13,14 @@ pub enum RequestStatus {
     Running,
     Success,
     Failed,
+    /// Not sent because an earlier attempt already succeeded
+    Skipped,
 }
 
 pub struct RequestDetail {
     pub success_count: u32,
     pub failed_count: u32,
-    pub local_time: String,
+    pub timing: SignUpTiming,
     pub server_time: Option<String>,
     pub errors: Vec<String>,
 }
@@ -47,7 +49,7 @@ impl SignUpPopup {
     }
 
     fn calculate_countdown(&self) -> String {
-        let now = Local::now().time();
+        let now = crate::backend::clock::now().time();
         if let Ok(target) = NaiveTime::parse_from_str(&self.target_time, "%H:%M") {
             let diff = target.signed_duration_since(now);
             if diff.num_seconds() <= 0 {
@@ -110,14 +112,21 @@ impl SignUpPopup {
                 }
                 RequestStatus::Success => ("✅", Style::default().fg(Color::Green)),
                 RequestStatus::Failed => ("❌", Style::default().fg(Color::Red)),
+                RequestStatus::Skipped => ("➖", Style::default().fg(Color::DarkGray)),
             };
 
-            let (s_text, f_text, local_text, server_text, errors) =
+            let (s_text, f_text, timing_cells, server_text, errors) =
                 if let Some(detail) = &self.request_details[i] {
+                    let t = &detail.timing;
                     (
                         detail.success_count.to_string(),
                         detail.failed_count.to_string(),
-                        detail.local_time.clone(),
+                        [
+                            t.planned.map(format_relative).unwrap_or_default(),
+                            format_relative(t.sent),
+                            format_relative(t.arrival),
+                            format_relative(t.response),
+                        ],
                         detail.server_time.clone().unwrap_or_default(),
                         &detail.errors,
                     )
@@ -125,21 +134,24 @@ impl SignUpPopup {
                     (
                         "".to_string(),
                         "".to_string(),
-                        "".to_string(),
+                        Default::default(),
                         "".to_string(),
                         &vec![],
                     )
                 };
 
             rows.push(
-                Row::new(vec![
-                    Cell::from(icon),
-                    Cell::from(format!("Anfrage #{}", i + 1)),
-                    Cell::from(s_text).style(Style::default().fg(Color::Green)),
-                    Cell::from(f_text).style(Style::default().fg(Color::Red)),
-                    Cell::from(local_text),
-                    Cell::from(server_text),
-                ])
+                Row::new(
+                    [
+                        Cell::from(icon),
+                        Cell::from(format!("Anfrage #{}", i + 1)),
+                        Cell::from(s_text).style(Style::default().fg(Color::Green)),
+                        Cell::from(f_text).style(Style::default().fg(Color::Red)),
+                    ]
+                    .into_iter()
+                    .chain(timing_cells.map(Cell::from))
+                    .chain([Cell::from(server_text)]),
+                )
                 .style(style),
             );
 
@@ -151,10 +163,6 @@ impl SignUpPopup {
                         Span::styled("  └─ ⚠️ ", Style::default().fg(Color::Yellow)),
                         Span::styled(err.clone(), Style::default().fg(Color::Red)),
                     ])),
-                    Cell::from(""),
-                    Cell::from(""),
-                    Cell::from(""),
-                    Cell::from(""),
                 ]));
             }
         }
@@ -166,7 +174,10 @@ impl SignUpPopup {
                 Constraint::Fill(1),
                 Constraint::Length(5),
                 Constraint::Length(5),
-                Constraint::Length(15),
+                Constraint::Length(TIMING_WIDTH),
+                Constraint::Length(TIMING_WIDTH),
+                Constraint::Length(TIMING_WIDTH),
+                Constraint::Length(TIMING_WIDTH),
                 Constraint::Length(11),
             ],
         )
@@ -176,7 +187,10 @@ impl SignUpPopup {
                 Cell::from("Anfrage"),
                 Cell::from("✅"),
                 Cell::from("❌"),
-                Cell::from("Local Time"),
+                Cell::from("Planned"),
+                Cell::from("Sent"),
+                Cell::from("Arrival"),
+                Cell::from("Response"),
                 Cell::from("Server Time"),
             ])
             .style(
@@ -242,6 +256,14 @@ impl SignUpPopup {
         let course_list = List::new(course_items).block(Block::default().title(" Kurse "));
         f.render_widget(course_list, chunks[2]);
     }
+}
+
+/// Column width of a time relative to the target, e.g. `-1234ms`
+const TIMING_WIDTH: u16 = 9;
+
+/// Signed milliseconds relative to the target, e.g. `+12ms`
+fn format_relative(d: chrono::Duration) -> String {
+    format!("{:+}ms", d.num_milliseconds())
 }
 
 fn centered_rect(percent_x: u16, percent_y: u16, r: Rect) -> Rect {
