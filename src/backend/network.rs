@@ -1,11 +1,11 @@
-use std::{collections::HashMap, sync::Arc, time::Instant};
+use std::{collections::HashMap, fmt, sync::Arc, time::Instant};
 
 use chrono::{DateTime, Duration, Utc};
-use reqwest::{Client, Method, Response, cookie::Jar, header::DATE};
+use reqwest::{Client, Method, RequestBuilder, StatusCode, cookie::Jar, header::DATE};
 use tokio::sync::mpsc;
 
 use crate::{
-    app::{BackendEvent, BatchSignUpReport, SIGNUP_ATTEMPTS},
+    app::{BackendEvent, BatchSignUpReport, Course, SIGNUP_ATTEMPTS},
     backend::{
         clock::{BoundarySample, OffsetEstimate, OffsetSample, TimeProbe},
         scraper::{self, check_login_error, parse_courses},
@@ -41,6 +41,31 @@ enum TimeSource {
     /// "Serverzeit" text on `mycorona.html`
     ServerzeitPage,
 }
+
+#[derive(Debug)]
+pub enum NetworkError {
+    /// The server rejected the session, e.g. after a login in the browser
+    SessionExpired,
+    /// Non-success status other than `401`/`403`
+    Status(StatusCode),
+    /// Request could not be sent or no response arrived
+    Request(reqwest::Error),
+    /// Response body could not be read
+    Body(reqwest::Error),
+}
+
+impl fmt::Display for NetworkError {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::SessionExpired => write!(f, "Session abgelaufen."),
+            Self::Status(status) => write!(f, "Server-Fehler: Status {}", status),
+            Self::Request(e) => write!(f, "Netzwerkfehler: {}", e),
+            Self::Body(e) => write!(f, "Fehler beim Lesen der Antwort: {}", e),
+        }
+    }
+}
+
+impl std::error::Error for NetworkError {}
 
 #[derive(Clone)]
 pub struct NetworkClient {
@@ -127,7 +152,11 @@ impl NetworkClient {
     /// Pick the first source that delivers the server time
     async fn detect_time_source(&self) -> Result<TimeSource, String> {
         let mut errors = Vec::new();
-        for source in [TimeSource::DateHead, TimeSource::DateGet, TimeSource::ServerzeitPage] {
+        for source in [
+            TimeSource::DateHead,
+            TimeSource::DateGet,
+            TimeSource::ServerzeitPage,
+        ] {
             match self.probe_time(source).await {
                 Ok(_) => return Ok(source),
                 Err(e) => errors.push(e),
@@ -237,28 +266,53 @@ impl NetworkClient {
         Ok(TimeProbe { sent, rtt, server })
     }
 
-    pub async fn get_courses(&self, tx: mpsc::Sender<BackendEvent>) {
+    /// Send `request` and return the response HTML of a logged-in page
+    async fn fetch_page(&self, request: RequestBuilder) -> Result<String, NetworkError> {
+        let response = request.send().await.map_err(NetworkError::Request)?;
+
+        let status = response.status();
+        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+            return Err(NetworkError::SessionExpired);
+        }
+        if !status.is_success() {
+            return Err(NetworkError::Status(status));
+        }
+
+        let html = response.text().await.map_err(NetworkError::Body)?;
+        // Expired sessions are redirected to the login form
+        if html.contains("id=\"IndexForm\"") {
+            return Err(NetworkError::SessionExpired);
+        }
+
+        Ok(html)
+    }
+
+    pub async fn get_courses(&self) -> Result<Vec<Course>, NetworkError> {
+        let courses_url = format!("{}/user/mycorona.html", BASE_URL);
+        let html = self.fetch_page(self.client.get(courses_url)).await?;
+        Ok(parse_courses(&html))
+    }
+
+    /// Send one sign-up request for `ids` and return the response HTML
+    async fn post_sign_up(&self, ids: &[String]) -> Result<String, NetworkError> {
         let courses_url = format!("{}/user/mycorona.html", BASE_URL);
 
-        match self.client.get(courses_url).send().await {
-            Ok(response) if response.status().is_success() => match response.text().await {
-                Ok(html) => {
-                    let courses = parse_courses(&html);
-                    let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
-                }
-                Err(e) => {
-                    let err = format!("Failed to read HTML body: {}", e);
-                    let _ = tx.send(BackendEvent::FetchFailed(err)).await;
-                }
-            },
-            Ok(response) => {
-                let err = format!("Server returned status: {}", response.status());
-                let _ = tx.send(BackendEvent::FetchFailed(err)).await;
-            }
-            Err(e) => {
-                let _ = tx.send(BackendEvent::FetchFailed(e.to_string())).await;
-            }
+        let mut body = HashMap::new();
+        for id in ids {
+            body.insert(format!("check_{}", id), "on");
+            body.insert(format!("sort_{}", id), "000");
         }
+        body.insert("action".into(), "5");
+        body.insert("scope".into(), "inspections");
+
+        let request = self
+            .client
+            .post(&courses_url)
+            .header("Referer", &courses_url)
+            .header("Origin", "https://campusonline.uni-ulm.de")
+            .form(&body);
+
+        self.fetch_page(request).await
     }
 
     pub async fn sign_up_courses(&self, ids: Vec<String>, tx: mpsc::Sender<BackendEvent>) {
@@ -266,68 +320,37 @@ impl NetworkClient {
             return;
         }
 
-        let courses_url = format!("{}/user/mycorona.html", BASE_URL);
         let mut last_report: Option<BatchSignUpReport> = None;
 
         for i in 0..SIGNUP_ATTEMPTS {
             let attempt_num = (i + 1) as u32;
 
-            let mut body = HashMap::new();
-            for id in &ids {
-                body.insert(format!("check_{}", id), "on");
-                body.insert(format!("sort_{}", id), "000");
-            }
-            body.insert("action".into(), "5");
-            body.insert("scope".into(), "inspections");
-
-            let result: Result<Response, reqwest::Error> = self
-                .client
-                .post(&courses_url)
-                .header("Referer", &courses_url)
-                .header("Origin", "https://campusonline.uni-ulm.de")
-                .form(&body)
-                .send()
-                .await;
-
-            let report = match result {
-                Ok(response) if response.status().is_success() => match response.text().await {
-                    Ok(html) => {
-                        if html.contains("id=\"IndexForm\"") {
-                            let _ = tx
-                                .send(BackendEvent::SignUpAttempt(
-                                    attempt_num,
-                                    BatchSignUpReport::from_general_error(
-                                        "Session abgelaufen.".to_string(),
-                                    ),
-                                ))
-                                .await;
-                            let _ = tx
-                                .send(BackendEvent::InternalMessage(
-                                    "Anmeldung wegen abgelaufener Session abgebrochen.".to_string(),
-                                ))
-                                .await;
-                            return;
-                        }
-
-                        let courses = parse_courses(&html);
-                        let mut course_map = HashMap::new();
-                        for c in &courses {
-                            course_map.insert(c.name.clone(), c.id.clone());
-                        }
-                        let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
-
-                        scraper::parse_sign_up_results(&html, &course_map)
+            let report = match self.post_sign_up(&ids).await {
+                Ok(html) => {
+                    let courses = parse_courses(&html);
+                    let mut course_map = HashMap::new();
+                    for c in &courses {
+                        course_map.insert(c.name.clone(), c.id.clone());
                     }
-                    Err(e) => BatchSignUpReport::from_general_error(format!(
-                        "Fehler beim Lesen der Antwort: {}",
-                        e
-                    )),
-                },
-                Ok(response) => BatchSignUpReport::from_general_error(format!(
-                    "Server-Fehler: Status {}",
-                    response.status()
-                )),
-                Err(e) => BatchSignUpReport::from_general_error(format!("Netzwerkfehler: {}", e)),
+                    let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
+
+                    scraper::parse_sign_up_results(&html, &course_map)
+                }
+                Err(e @ NetworkError::SessionExpired) => {
+                    let _ = tx
+                        .send(BackendEvent::SignUpAttempt(
+                            attempt_num,
+                            BatchSignUpReport::from_general_error(e.to_string()),
+                        ))
+                        .await;
+                    let _ = tx
+                        .send(BackendEvent::InternalMessage(
+                            "Anmeldung wegen abgelaufener Session abgebrochen.".to_string(),
+                        ))
+                        .await;
+                    return;
+                }
+                Err(e) => BatchSignUpReport::from_general_error(e.to_string()),
             };
 
             let _ = tx
