@@ -41,6 +41,24 @@ impl Default for ServerClock {
     }
 }
 
+/// One request that read the server clock at whole-second resolution
+#[derive(Debug, Clone, Copy)]
+pub struct TimeProbe {
+    /// Local time when the request was sent
+    pub sent: DateTime<Utc>,
+    /// Round-trip time until the server time was available
+    pub rtt: Duration,
+    /// Server time, truncated to whole seconds
+    pub server: DateTime<Utc>,
+}
+
+impl TimeProbe {
+    /// Local time when the server time was available
+    pub fn received(&self) -> DateTime<Utc> {
+        self.sent + self.rtt
+    }
+}
+
 /// Single offset measurement from one HTTP request
 #[derive(Debug, Clone, Copy)]
 pub struct OffsetSample {
@@ -48,6 +66,47 @@ pub struct OffsetSample {
     pub offset: Duration,
     /// Round-trip time until the response headers arrived
     pub rtt: Duration,
+}
+
+impl From<TimeProbe> for OffsetSample {
+    fn from(probe: TimeProbe) -> Self {
+        // The server time is truncated to whole seconds, so the true time is on average 500ms later
+        let offset = probe.server + Duration::milliseconds(500) - (probe.sent + probe.rtt / 2);
+        Self {
+            offset,
+            rtt: probe.rtt,
+        }
+    }
+}
+
+/// Offset measured at the moment the server clock advanced to a new second
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub struct BoundarySample {
+    /// Server time minus local time
+    pub offset: Duration,
+    /// Half the width of the local time window that contains the second boundary
+    pub uncertainty: Duration,
+}
+
+impl BoundarySample {
+    /// Locate the server second boundary between two consecutive probes.
+    /// Returns `None` if the server second did not advance
+    pub fn between(before: &TimeProbe, after: &TimeProbe) -> Option<Self> {
+        if after.server <= before.server {
+            return None;
+        }
+
+        // `before` read its second before the boundary, so the boundary lies after `before.sent`.
+        // `after` read its second after the boundary, so the boundary lies before `after.received()`
+        let earliest = before.sent;
+        let latest = after.received();
+        let uncertainty = (latest - earliest) / 2;
+
+        Some(Self {
+            offset: after.server - (earliest + uncertainty),
+            uncertainty,
+        })
+    }
 }
 
 /// Offset estimate combined from several [`OffsetSample`]s
@@ -76,19 +135,42 @@ impl OffsetEstimate {
         let mut offsets: Vec<Duration> = samples.iter().map(|s| s.offset).collect();
         offsets.sort();
 
-        let mid = offsets.len() / 2;
-        let offset = if offsets.len() % 2 == 0 {
-            offsets[mid - 1] + (offsets[mid] - offsets[mid - 1]) / 2
-        } else {
-            offsets[mid]
-        };
-        let uncertainty = (offsets[offsets.len() - 1] - offsets[0]) / 2;
-
         Some(Self {
-            offset,
-            uncertainty,
+            offset: median(&offsets),
+            uncertainty: (offsets[offsets.len() - 1] - offsets[0]) / 2,
             samples: offsets.len(),
         })
+    }
+
+    /// Median of the boundary offsets. The uncertainty is the larger of the median
+    /// boundary uncertainty and half the spread. Returns `None` if `samples` is empty
+    pub fn from_boundaries(samples: &[BoundarySample]) -> Option<Self> {
+        if samples.is_empty() {
+            return None;
+        }
+
+        let mut offsets: Vec<Duration> = samples.iter().map(|s| s.offset).collect();
+        offsets.sort();
+        let mut uncertainties: Vec<Duration> = samples.iter().map(|s| s.uncertainty).collect();
+        uncertainties.sort();
+
+        let spread = (offsets[offsets.len() - 1] - offsets[0]) / 2;
+
+        Some(Self {
+            offset: median(&offsets),
+            uncertainty: median(&uncertainties).max(spread),
+            samples: samples.len(),
+        })
+    }
+}
+
+/// Median of a sorted, non-empty slice
+fn median(sorted: &[Duration]) -> Duration {
+    let mid = sorted.len() / 2;
+    if sorted.len() % 2 == 0 {
+        sorted[mid - 1] + (sorted[mid] - sorted[mid - 1]) / 2
+    } else {
+        sorted[mid]
     }
 }
 
@@ -152,5 +234,63 @@ mod tests {
         assert_eq!(estimate.samples, 3);
         assert_eq!(estimate.offset, Duration::milliseconds(50));
         assert_eq!(estimate.uncertainty, Duration::milliseconds(300));
+    }
+
+    fn probe(sent_ms: i64, rtt_ms: i64, server_s: i64) -> TimeProbe {
+        TimeProbe {
+            sent: DateTime::from_timestamp_millis(sent_ms).unwrap(),
+            rtt: Duration::milliseconds(rtt_ms),
+            server: DateTime::from_timestamp(server_s, 0).unwrap(),
+        }
+    }
+
+    #[test]
+    fn probe_sample_corrects_truncation() {
+        let sample = OffsetSample::from(probe(10_000, 100, 12));
+        assert_eq!(sample.offset, Duration::milliseconds(2450));
+        assert_eq!(sample.rtt, Duration::milliseconds(100));
+    }
+
+    #[test]
+    fn boundary_needs_second_change() {
+        assert_eq!(
+            BoundarySample::between(&probe(10_000, 30, 12), &probe(10_040, 30, 12)),
+            None
+        );
+    }
+
+    #[test]
+    fn boundary_lies_between_probes() {
+        // Boundary window is [10_000, 10_070], midpoint 10_035
+        let sample =
+            BoundarySample::between(&probe(10_000, 30, 12), &probe(10_040, 30, 13)).unwrap();
+        assert_eq!(sample.offset, Duration::milliseconds(2965));
+        assert_eq!(sample.uncertainty, Duration::milliseconds(35));
+    }
+
+    #[test]
+    fn boundaries_use_median_and_widest_error() {
+        let boundary = |offset_ms, uncertainty_ms| BoundarySample {
+            offset: Duration::milliseconds(offset_ms),
+            uncertainty: Duration::milliseconds(uncertainty_ms),
+        };
+
+        let tight = OffsetEstimate::from_boundaries(&[
+            boundary(100, 30),
+            boundary(110, 40),
+            boundary(90, 20),
+        ])
+        .unwrap();
+        assert_eq!(tight.offset, Duration::milliseconds(100));
+        assert_eq!(tight.uncertainty, Duration::milliseconds(30));
+
+        let spread = OffsetEstimate::from_boundaries(&[
+            boundary(0, 10),
+            boundary(100, 10),
+            boundary(300, 10),
+        ])
+        .unwrap();
+        assert_eq!(spread.offset, Duration::milliseconds(100));
+        assert_eq!(spread.uncertainty, Duration::milliseconds(150));
     }
 }

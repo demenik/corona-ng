@@ -7,7 +7,7 @@ use tokio::sync::mpsc;
 use crate::{
     app::{BackendEvent, BatchSignUpReport, SIGNUP_ATTEMPTS},
     backend::{
-        clock::{OffsetEstimate, OffsetSample},
+        clock::{BoundarySample, OffsetEstimate, OffsetSample, TimeProbe},
         scraper::{self, check_login_error, parse_courses},
     },
 };
@@ -18,6 +18,29 @@ pub const CLOCK_SAMPLES: usize = 8;
 /// Pause between clock samples. Not a divisor of 1s, so samples land at
 /// different sub-second phases of the server clock
 const CLOCK_SAMPLE_INTERVAL: std::time::Duration = std::time::Duration::from_millis(150);
+
+/// Number of second boundaries measured by [`NetworkClient::sync_offset`]
+const BOUNDARY_ROUNDS: usize = 3;
+
+/// Minimum spacing between two polls while waiting for a second boundary
+const BOUNDARY_POLL_INTERVAL: std::time::Duration = std::time::Duration::from_millis(25);
+
+/// How early polling starts before the expected boundary, on top of the coarse uncertainty
+const BOUNDARY_LEAD: Duration = Duration::milliseconds(150);
+
+/// Give up on a boundary round after this long
+const BOUNDARY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
+
+/// Where the server time is read from
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum TimeSource {
+    /// `Date` header of a `HEAD` request
+    DateHead,
+    /// `Date` header of a `GET` request
+    DateGet,
+    /// "Serverzeit" text on `mycorona.html`
+    ServerzeitPage,
+}
 
 #[derive(Clone)]
 pub struct NetworkClient {
@@ -76,11 +99,46 @@ impl NetworkClient {
         }
     }
 
-    /// Estimate the server clock offset from the `Date` header of `n` requests.
-    /// Uses `HEAD` and switches to `GET` if `HEAD` fails
+    /// Coarse estimate of the server clock offset from `n` requests.
+    /// Accurate to about half a second
     pub async fn measure_offset(&self, n: usize) -> Result<OffsetEstimate, String> {
-        let url = format!("{}/index.html", BASE_URL);
-        let mut method = Method::HEAD;
+        let source = self.detect_time_source().await?;
+        self.coarse_offset(source, n).await
+    }
+
+    /// Estimate the server clock offset with sub-second precision.
+    /// Falls back to the coarse estimate if no second boundary is detected
+    pub async fn sync_offset(&self) -> Result<OffsetEstimate, String> {
+        let source = self.detect_time_source().await?;
+        let coarse = self.coarse_offset(source, CLOCK_SAMPLES).await?;
+
+        let mut boundaries = Vec::with_capacity(BOUNDARY_ROUNDS);
+        for _ in 0..BOUNDARY_ROUNDS {
+            if let Ok(boundary) = self.find_second_boundary(source, &coarse).await {
+                boundaries.push(boundary);
+            }
+        }
+
+        Ok(OffsetEstimate::from_boundaries(&boundaries).unwrap_or(coarse))
+    }
+
+    /// Pick the first source that delivers the server time
+    async fn detect_time_source(&self) -> Result<TimeSource, String> {
+        let mut errors = Vec::new();
+        for source in [TimeSource::DateHead, TimeSource::DateGet, TimeSource::ServerzeitPage] {
+            match self.probe_time(source).await {
+                Ok(_) => return Ok(source),
+                Err(e) => errors.push(e),
+            }
+        }
+
+        Err(format!(
+            "Serverzeit konnte nicht bestimmt werden: {}",
+            errors.join("; ")
+        ))
+    }
+
+    async fn coarse_offset(&self, source: TimeSource, n: usize) -> Result<OffsetEstimate, String> {
         let mut samples = Vec::with_capacity(n);
         let mut last_err = None;
 
@@ -89,16 +147,8 @@ impl NetworkClient {
                 tokio::time::sleep(CLOCK_SAMPLE_INTERVAL).await;
             }
 
-            let result = match self.sample_offset(&url, method.clone()).await {
-                Err(_) if method == Method::HEAD => {
-                    method = Method::GET;
-                    self.sample_offset(&url, Method::GET).await
-                }
-                result => result,
-            };
-
-            match result {
-                Ok(sample) => samples.push(sample),
+            match self.probe_time(source).await {
+                Ok(probe) => samples.push(OffsetSample::from(probe)),
                 Err(e) => last_err = Some(e),
             }
         }
@@ -111,8 +161,51 @@ impl NetworkClient {
         })
     }
 
-    async fn sample_offset(&self, url: &str, method: Method) -> Result<OffsetSample, String> {
-        let t0 = Utc::now();
+    /// Poll shortly before the expected server second boundary until the server second changes
+    async fn find_second_boundary(
+        &self,
+        source: TimeSource,
+        coarse: &OffsetEstimate,
+    ) -> Result<BoundarySample, String> {
+        let lead = (coarse.uncertainty + BOUNDARY_LEAD).min(Duration::seconds(1));
+        let server_now = Utc::now() + coarse.offset;
+        let mut boundary = DateTime::from_timestamp(server_now.timestamp() + 1, 0)
+            .ok_or("Ungültige Serverzeit")?;
+        if boundary - coarse.offset - lead < Utc::now() {
+            boundary += Duration::seconds(1);
+        }
+
+        let start = boundary - coarse.offset - lead;
+        if let Ok(wait) = (start - Utc::now()).to_std() {
+            tokio::time::sleep(wait).await;
+        }
+
+        let deadline = Instant::now() + BOUNDARY_TIMEOUT;
+        let mut polled = Instant::now();
+        let mut prev = self.probe_time(source).await?;
+
+        while Instant::now() < deadline {
+            tokio::time::sleep_until((polled + BOUNDARY_POLL_INTERVAL).into()).await;
+
+            polled = Instant::now();
+            let next = self.probe_time(source).await?;
+            if let Some(sample) = BoundarySample::between(&prev, &next) {
+                return Ok(sample);
+            }
+            prev = next;
+        }
+
+        Err("Sekundenwechsel der Serverzeit nicht erkannt".to_string())
+    }
+
+    async fn probe_time(&self, source: TimeSource) -> Result<TimeProbe, String> {
+        let (method, url) = match source {
+            TimeSource::DateHead => (Method::HEAD, format!("{}/index.html", BASE_URL)),
+            TimeSource::DateGet => (Method::GET, format!("{}/index.html", BASE_URL)),
+            TimeSource::ServerzeitPage => (Method::GET, format!("{}/user/mycorona.html", BASE_URL)),
+        };
+
+        let sent = Utc::now();
         let start = Instant::now();
         let response = self
             .client
@@ -120,22 +213,26 @@ impl NetworkClient {
             .send()
             .await
             .map_err(|e| e.to_string())?;
+
+        let server = if source == TimeSource::ServerzeitPage {
+            let html = response.text().await.map_err(|e| e.to_string())?;
+            scraper::get_server_time(&html)
+                .ok_or("Serverzeit nicht in Seite gefunden")?
+                .with_timezone(&Utc)
+        } else {
+            let date = response
+                .headers()
+                .get(DATE)
+                .ok_or("Date-Header fehlt")?
+                .to_str()
+                .map_err(|e| e.to_string())?;
+            DateTime::parse_from_rfc2822(date)
+                .map_err(|e| format!("Ungültiger Date-Header '{}': {}", date, e))?
+                .with_timezone(&Utc)
+        };
         let rtt = Duration::from_std(start.elapsed()).map_err(|e| e.to_string())?;
 
-        let date = response
-            .headers()
-            .get(DATE)
-            .ok_or("Date-Header fehlt")?
-            .to_str()
-            .map_err(|e| e.to_string())?;
-        let server_time = DateTime::parse_from_rfc2822(date)
-            .map_err(|e| format!("Ungültiger Date-Header '{}': {}", date, e))?
-            .with_timezone(&Utc);
-
-        // The header truncates to whole seconds, so the true time is on average 500ms later
-        let offset = server_time + Duration::milliseconds(500) - (t0 + rtt / 2);
-
-        Ok(OffsetSample { offset, rtt })
+        Ok(TimeProbe { sent, rtt, server })
     }
 
     pub async fn get_courses(&self, tx: mpsc::Sender<BackendEvent>) {
