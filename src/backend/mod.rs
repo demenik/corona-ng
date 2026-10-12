@@ -3,6 +3,7 @@ use std::{
     time::{Duration, Instant},
 };
 
+use chrono::TimeZone;
 use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
@@ -28,6 +29,9 @@ const PRE_TARGET_SYNC_LEAD: chrono::Duration = chrono::Duration::seconds(60);
 /// No clock sync starts when a scheduled target is this close, so sync requests
 /// do not compete with the sign-up requests. A full sync takes up to about 12s
 const SYNC_QUIET_WINDOW: chrono::Duration = chrono::Duration::seconds(30);
+
+/// The sign-up task is spawned this long before its target and waits for the exact send time itself
+const SIGNUP_SPAWN_LEAD: chrono::Duration = chrono::Duration::seconds(2);
 
 /// Interval between course fetches that keep the session alive while logged in
 const KEEPALIVE_INTERVAL: Duration = Duration::from_secs(300);
@@ -248,15 +252,23 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                         continue;
                     }
 
-                    // Trigger 200ms before target
-                    if diff.num_milliseconds() <= 500 && diff.num_milliseconds() > -5000 {
+                    // Spawn early and sleep inside the task, so the send time does not depend on the ticker
+                    if diff <= SIGNUP_SPAWN_LEAD && diff > -chrono::Duration::seconds(5) {
                         state.triggered_schedules.insert(key);
 
                         let _ = backend_tx.send(BackendEvent::InternalMessage(format!("Anmeldung für {} gestartet!", target_time))).await;
 
+                        // Send half an RTT early so the request arrives at the target
+                        let clock = clock::get();
+                        let send_at = SERVER_TZ
+                            .from_local_datetime(&target_dt)
+                            .earliest()
+                            .map_or_else(Instant::now, |t| clock.instant_at(t - clock.rtt / 2));
+
                         let client = state.network.clone();
                         let btx = backend_tx.clone();
                         tokio::spawn(async move {
+                            tokio::time::sleep_until(send_at.into()).await;
                             client.sign_up_courses(ids, btx).await;
                         });
                     }

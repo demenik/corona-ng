@@ -39,6 +39,15 @@ impl ServerClock {
     pub fn now(&self) -> DateTime<Tz> {
         (Utc::now() + self.offset).with_timezone(&SERVER_TZ)
     }
+
+    /// Local instant at which the server clock reaches `server_time`.
+    /// Times in the past map to now
+    pub fn instant_at(&self, server_time: DateTime<Tz>) -> Instant {
+        let local_now = Instant::now();
+        (server_time - self.now())
+            .to_std()
+            .map_or(local_now, |until| local_now + until)
+    }
 }
 
 impl Default for ServerClock {
@@ -252,6 +261,23 @@ mod tests {
         assert_eq!(estimate.offset, Duration::milliseconds(50));
         assert_eq!(estimate.rtt, Duration::milliseconds(10));
         assert_eq!(estimate.uncertainty, Duration::milliseconds(300));
+    }
+
+    #[test]
+    fn instant_at_applies_offset() {
+        let clock = ServerClock {
+            offset: Duration::seconds(5),
+            ..ServerClock::new()
+        };
+        let start = Instant::now();
+
+        let at = clock.instant_at(Utc::now().with_timezone(&SERVER_TZ) + Duration::seconds(7));
+        let until = at - start;
+        assert!(until >= std::time::Duration::from_millis(1900));
+        assert!(until <= std::time::Duration::from_millis(2100));
+
+        let past = clock.instant_at(Utc::now().with_timezone(&SERVER_TZ));
+        assert!(past <= Instant::now());
     }
 
     fn probe(sent_ms: i64, rtt_ms: i64, server_s: i64) -> TimeProbe {
