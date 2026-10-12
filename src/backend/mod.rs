@@ -8,7 +8,6 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     app::{BackendEvent, UiEvent},
     backend::{clock::ServerClock, network::NetworkClient},
-    store::{Credentials, PersistentStore, SecureCredentialStore},
 };
 
 pub mod clock;
@@ -31,7 +30,6 @@ pub struct BackendState {
     pub schedule: HashMap<String, Vec<String>>,
     pub triggered_schedules: HashSet<(chrono::NaiveDate, String)>,
     pub network: NetworkClient,
-    logged_in: bool,
     /// Start of the last clock sync attempt
     last_sync: Option<Instant>,
     sync_task: Option<JoinHandle<()>>,
@@ -52,16 +50,6 @@ impl BackendState {
         self.sync_task = Some(tokio::spawn(async move {
             sync_clock(&client, &tx).await;
         }));
-    }
-
-    pub async fn stored_credentials(&self) -> Option<Credentials> {
-        if !self.logged_in {
-            return None;
-        }
-        tokio::task::spawn_blocking(|| SecureCredentialStore::new().load())
-            .await
-            .ok()?
-            .ok()
     }
 
     fn stop_sync(&mut self) {
@@ -105,7 +93,6 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
         schedule: HashMap::new(),
         triggered_schedules: HashSet::new(),
         network: NetworkClient::new(),
-        logged_in: false,
         last_sync: None,
         sync_task: None,
         pre_synced_schedules: HashSet::new(),
@@ -119,15 +106,14 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                 match ui_event {
                     UiEvent::Login(user, pass) => {
                         // The next tick starts the initial clock sync since `last_sync` is unset
-                        state.logged_in = state.network.login(&user, &pass, backend_tx.clone()).await;
+                        state.network.login(&user, &pass, backend_tx.clone()).await;
                     }
                     UiEvent::Logout => {
-                        state.logged_in = false;
                         state.stop_sync();
-                        state.network = NetworkClient::new();
+                        state.network.logout();
                     }
                     UiEvent::FetchCourses => {
-                        let event = match state.network.get_courses().await {
+                        let event = match state.network.get_courses(&backend_tx).await {
                             Ok(courses) => BackendEvent::CoursesUpdate(courses),
                             Err(e) => BackendEvent::FetchFailed(e.to_string()),
                         };
@@ -146,6 +132,12 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
             }
 
             _ = ticker.tick() => {
+                let logged_in = state.network.is_logged_in();
+                // A failed re-login ends the session outside of `UiEvent::Logout`
+                if !logged_in && state.last_sync.is_some() {
+                    state.stop_sync();
+                }
+
                 let now = clock::now();
                 let time_str = now.format("%H:%M:%S%.3f").to_string();
                 let _ = backend_tx.send(BackendEvent::ClockTick(time_str)).await;
@@ -173,7 +165,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                         target_imminent = true;
                     }
 
-                    if state.logged_in
+                    if logged_in
                         && diff > SYNC_QUIET_WINDOW
                         && diff <= PRE_TARGET_SYNC_LEAD
                         && state.pre_synced_schedules.insert(key.clone())
@@ -199,7 +191,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                     }
                 }
 
-                if state.logged_in
+                if logged_in
                     && !target_imminent
                     && state.last_sync.is_none_or(|t| t.elapsed() >= CLOCK_SYNC_INTERVAL)
                 {

@@ -108,6 +108,10 @@ fn run_ui(
                     }
                 }
                 BackendEvent::LoginFailed(err) => {
+                    if app.current_screen == CurrentScreen::Dashboard {
+                        app.current_screen = CurrentScreen::Login;
+                        app.dashboard_screen.user = None;
+                    }
                     app.login_screen.set_status(format!("Fehler: {}", err));
                 }
                 BackendEvent::CoursesUpdate(courses) => {

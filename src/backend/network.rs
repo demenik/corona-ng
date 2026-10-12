@@ -1,15 +1,21 @@
-use std::{collections::HashMap, fmt, sync::Arc, time::Instant};
+use std::{
+    collections::HashMap,
+    fmt,
+    sync::{Arc, RwLock},
+    time::Instant,
+};
 
 use chrono::{DateTime, Duration, Utc};
 use reqwest::{Client, Method, RequestBuilder, StatusCode, cookie::Jar, header::DATE};
 use tokio::sync::mpsc;
 
 use crate::{
-    app::{BackendEvent, BatchSignUpReport, Course, SIGNUP_ATTEMPTS},
+    app::{BackendEvent, BatchSignUpReport, Course, SIGNUP_ATTEMPTS, User},
     backend::{
         clock::{BoundarySample, OffsetEstimate, OffsetSample, TimeProbe},
         scraper::{self, check_login_error, parse_courses},
     },
+    store::{Credentials, PersistentStore, SecureCredentialStore},
 };
 
 /// Default number of requests used by [`NetworkClient::measure_offset`]
@@ -67,63 +73,220 @@ impl fmt::Display for NetworkError {
 
 impl std::error::Error for NetworkError {}
 
+/// HTTP client and login state, shared by all clones of a [`NetworkClient`]
+struct Session {
+    client: Client,
+    /// Incremented whenever `client` is replaced, so callers can tell whether
+    /// a re-login already happened after their request was sent
+    generation: u64,
+    logged_in: bool,
+}
+
 #[derive(Clone)]
 pub struct NetworkClient {
-    client: Client,
-    cookie_jar: Arc<Jar>,
+    session: Arc<RwLock<Session>>,
+    /// Serializes re-logins, so parallel requests do not log in several times
+    relogin_lock: Arc<tokio::sync::Mutex<()>>,
 }
 
 const BASE_URL: &str = "https://campusonline.uni-ulm.de/CoronaNG";
 
-impl NetworkClient {
-    pub fn new() -> Self {
-        let cookie_jar = Arc::new(Jar::default());
-        let client = Client::builder()
-            .cookie_provider(Arc::clone(&cookie_jar))
-            .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0")
-            .build()
-            .expect("Failed to create HTTP client");
+/// Build a client with an empty cookie jar
+fn build_client() -> Client {
+    Client::builder()
+        .cookie_provider(Arc::new(Jar::default()))
+        .user_agent("Mozilla/5.0 (X11; Linux x86_64; rv:148.0) Gecko/20100101 Firefox/148.0")
+        .build()
+        .expect("Failed to create HTTP client")
+}
 
-        Self { client, cookie_jar }
+/// Send the login form with `client` and return the logged-in user
+async fn authenticate(client: &Client, user: &str, pass: &str) -> Result<User, String> {
+    let login_url = format!("{}/index.html", BASE_URL);
+    let mut body = HashMap::new();
+    body.insert("uid", user);
+    body.insert("password", pass);
+
+    let response = client
+        .post(login_url)
+        .form(&body)
+        .send()
+        .await
+        .map_err(|e| e.to_string())?;
+    if !response.status().is_success() {
+        return Err(format!(
+            "Server antwortete mit Status: {}",
+            response.status()
+        ));
     }
 
-    /// Log in and report the outcome via `tx`. Returns `true` on success
-    pub async fn login(&self, user: &str, pass: &str, tx: mpsc::Sender<BackendEvent>) -> bool {
-        let login_url = format!("{}/index.html", BASE_URL);
-        let mut body = HashMap::new();
-        body.insert("uid", user);
-        body.insert("password", pass);
+    let html = response
+        .text()
+        .await
+        .map_err(|e| format!("Failed to read response body: {}", e))?;
+    check_login_error(&html)
+}
 
-        match self.client.post(login_url).form(&body).send().await {
-            Ok(response) if response.status().is_success() => match response.text().await {
-                Ok(html) => match check_login_error(&html) {
-                    Ok(user) => {
-                        let _ = tx.send(BackendEvent::LoginSuccess(user)).await;
-                        return true;
-                    }
-                    Err(msg) => {
-                        let _ = tx.send(BackendEvent::LoginFailed(msg)).await;
-                    }
-                },
-                Err(e) => {
-                    let _ = tx
-                        .send(BackendEvent::LoginFailed(format!(
-                            "Failed to read response body: {}",
-                            e
-                        )))
-                        .await;
-                }
-            },
-            Ok(response) => {
-                let err = format!("Server antwortete mit Status: {}", response.status());
-                let _ = tx.send(BackendEvent::LoginFailed(err)).await;
+/// Send `request` and return the response HTML of a logged-in page
+async fn fetch_page(request: RequestBuilder) -> Result<String, NetworkError> {
+    let response = request.send().await.map_err(NetworkError::Request)?;
+
+    let status = response.status();
+    if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
+        return Err(NetworkError::SessionExpired);
+    }
+    if !status.is_success() {
+        return Err(NetworkError::Status(status));
+    }
+
+    let html = response.text().await.map_err(NetworkError::Body)?;
+    // Expired sessions are redirected to the login form
+    if html.contains("id=\"IndexForm\"") {
+        return Err(NetworkError::SessionExpired);
+    }
+
+    Ok(html)
+}
+
+/// Send one sign-up request for `ids` and return the response HTML
+async fn post_sign_up(client: Client, ids: &[String]) -> Result<String, NetworkError> {
+    let courses_url = format!("{}/user/mycorona.html", BASE_URL);
+
+    let mut body = HashMap::new();
+    for id in ids {
+        body.insert(format!("check_{}", id), "on");
+        body.insert(format!("sort_{}", id), "000");
+    }
+    body.insert("action".into(), "5");
+    body.insert("scope".into(), "inspections");
+
+    let request = client
+        .post(&courses_url)
+        .header("Referer", &courses_url)
+        .header("Origin", "https://campusonline.uni-ulm.de")
+        .form(&body);
+
+    fetch_page(request).await
+}
+
+impl NetworkClient {
+    pub fn new() -> Self {
+        Self {
+            session: Arc::new(RwLock::new(Session {
+                client: build_client(),
+                generation: 0,
+                logged_in: false,
+            })),
+            relogin_lock: Arc::new(tokio::sync::Mutex::new(())),
+        }
+    }
+
+    fn client(&self) -> Client {
+        self.session.read().unwrap().client.clone()
+    }
+
+    pub fn is_logged_in(&self) -> bool {
+        self.session.read().unwrap().logged_in
+    }
+
+    /// Log in and report the outcome via `tx`
+    pub async fn login(&self, user: &str, pass: &str, tx: mpsc::Sender<BackendEvent>) {
+        let event = match authenticate(&self.client(), user, pass).await {
+            Ok(user) => {
+                self.session.write().unwrap().logged_in = true;
+                BackendEvent::LoginSuccess(user)
             }
-            Err(e) => {
-                let _ = tx.send(BackendEvent::LoginFailed(e.to_string())).await;
-            }
+            Err(msg) => BackendEvent::LoginFailed(msg),
+        };
+        let _ = tx.send(event).await;
+    }
+
+    /// End the session for all clones. Running tasks stop re-logging in
+    pub fn logout(&self) {
+        let mut session = self.session.write().unwrap();
+        session.client = build_client();
+        session.generation += 1;
+        session.logged_in = false;
+    }
+
+    /// Credentials from the keyring. `None` while logged out, so a re-login
+    /// never undoes a logout
+    async fn stored_credentials(&self) -> Option<Credentials> {
+        if !self.is_logged_in() {
+            return None;
+        }
+        tokio::task::spawn_blocking(|| SecureCredentialStore::new().load())
+            .await
+            .ok()?
+            .ok()
+    }
+
+    /// Log in again with a fresh cookie jar, unless another task already did so
+    /// since `seen_generation`
+    async fn relogin(
+        &self,
+        seen_generation: u64,
+        tx: &mpsc::Sender<BackendEvent>,
+    ) -> Result<(), NetworkError> {
+        let _guard = self.relogin_lock.lock().await;
+        if self.session.read().unwrap().generation != seen_generation {
+            return Ok(());
         }
 
-        false
+        let creds = self
+            .stored_credentials()
+            .await
+            .ok_or(NetworkError::SessionExpired)?;
+        let client = build_client();
+
+        match authenticate(&client, &creds.username, &creds.password).await {
+            Ok(_) => {
+                {
+                    let mut session = self.session.write().unwrap();
+                    // A logout during the login wins
+                    if session.generation != seen_generation || !session.logged_in {
+                        return Err(NetworkError::SessionExpired);
+                    }
+                    session.client = client;
+                    session.generation += 1;
+                }
+                let _ = tx
+                    .send(BackendEvent::InternalMessage(
+                        "Session erneuert.".to_string(),
+                    ))
+                    .await;
+                Ok(())
+            }
+            Err(msg) => {
+                self.session.write().unwrap().logged_in = false;
+                let _ = tx.send(BackendEvent::LoginFailed(msg)).await;
+                Err(NetworkError::SessionExpired)
+            }
+        }
+    }
+
+    /// Run `request` and, if the session expired, log in again and retry once
+    async fn with_session<T, F, Fut>(
+        &self,
+        tx: &mpsc::Sender<BackendEvent>,
+        request: F,
+    ) -> Result<T, NetworkError>
+    where
+        F: Fn(Client) -> Fut,
+        Fut: Future<Output = Result<T, NetworkError>>,
+    {
+        let (client, generation) = {
+            let session = self.session.read().unwrap();
+            (session.client.clone(), session.generation)
+        };
+
+        match request(client).await {
+            Err(NetworkError::SessionExpired) => {
+                self.relogin(generation, tx).await?;
+                request(self.client()).await
+            }
+            result => result,
+        }
     }
 
     /// Coarse estimate of the server clock offset from `n` requests.
@@ -239,7 +402,7 @@ impl NetworkClient {
         let sent = Utc::now();
         let start = Instant::now();
         let response = self
-            .client
+            .client()
             .request(method, url)
             .send()
             .await
@@ -266,53 +429,15 @@ impl NetworkClient {
         Ok(TimeProbe { sent, rtt, server })
     }
 
-    /// Send `request` and return the response HTML of a logged-in page
-    async fn fetch_page(&self, request: RequestBuilder) -> Result<String, NetworkError> {
-        let response = request.send().await.map_err(NetworkError::Request)?;
-
-        let status = response.status();
-        if status == StatusCode::UNAUTHORIZED || status == StatusCode::FORBIDDEN {
-            return Err(NetworkError::SessionExpired);
-        }
-        if !status.is_success() {
-            return Err(NetworkError::Status(status));
-        }
-
-        let html = response.text().await.map_err(NetworkError::Body)?;
-        // Expired sessions are redirected to the login form
-        if html.contains("id=\"IndexForm\"") {
-            return Err(NetworkError::SessionExpired);
-        }
-
-        Ok(html)
-    }
-
-    pub async fn get_courses(&self) -> Result<Vec<Course>, NetworkError> {
+    pub async fn get_courses(
+        &self,
+        tx: &mpsc::Sender<BackendEvent>,
+    ) -> Result<Vec<Course>, NetworkError> {
         let courses_url = format!("{}/user/mycorona.html", BASE_URL);
-        let html = self.fetch_page(self.client.get(courses_url)).await?;
+        let html = self
+            .with_session(tx, |client| fetch_page(client.get(&courses_url)))
+            .await?;
         Ok(parse_courses(&html))
-    }
-
-    /// Send one sign-up request for `ids` and return the response HTML
-    async fn post_sign_up(&self, ids: &[String]) -> Result<String, NetworkError> {
-        let courses_url = format!("{}/user/mycorona.html", BASE_URL);
-
-        let mut body = HashMap::new();
-        for id in ids {
-            body.insert(format!("check_{}", id), "on");
-            body.insert(format!("sort_{}", id), "000");
-        }
-        body.insert("action".into(), "5");
-        body.insert("scope".into(), "inspections");
-
-        let request = self
-            .client
-            .post(&courses_url)
-            .header("Referer", &courses_url)
-            .header("Origin", "https://campusonline.uni-ulm.de")
-            .form(&body);
-
-        self.fetch_page(request).await
     }
 
     pub async fn sign_up_courses(&self, ids: Vec<String>, tx: mpsc::Sender<BackendEvent>) {
@@ -325,7 +450,10 @@ impl NetworkClient {
         for i in 0..SIGNUP_ATTEMPTS {
             let attempt_num = (i + 1) as u32;
 
-            let report = match self.post_sign_up(&ids).await {
+            let report = match self
+                .with_session(&tx, |client| post_sign_up(client, &ids))
+                .await
+            {
                 Ok(html) => {
                     let courses = parse_courses(&html);
                     let mut course_map = HashMap::new();
