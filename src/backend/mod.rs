@@ -8,6 +8,7 @@ use tokio::{sync::mpsc, task::JoinHandle};
 use crate::{
     app::{BackendEvent, UiEvent},
     backend::{clock::ServerClock, network::NetworkClient},
+    store::{Credentials, PersistentStore, SecureCredentialStore},
 };
 
 pub mod clock;
@@ -51,6 +52,16 @@ impl BackendState {
         self.sync_task = Some(tokio::spawn(async move {
             sync_clock(&client, &tx).await;
         }));
+    }
+
+    pub async fn stored_credentials(&self) -> Option<Credentials> {
+        if !self.logged_in {
+            return None;
+        }
+        tokio::task::spawn_blocking(|| SecureCredentialStore::new().load())
+            .await
+            .ok()?
+            .ok()
     }
 
     fn stop_sync(&mut self) {
