@@ -1,5 +1,8 @@
 # CoronaNG - Automated ASQ Registration
 
+[![English](https://img.shields.io/badge/lang-English-blue?style=flat-square&logo=googletranslate&logoColor=white)](README.md)
+[![Deutsch](https://img.shields.io/badge/lang-Deutsch-red?style=flat-square&logo=googletranslate&logoColor=white)](README.de.md)
+
 `corona-ng` is a Terminal User Interface (TUI) designed to help students at the **University of Ulm** secure spots in **ASQ (Additive Schlüssel Qualifikationen)** courses via the [CoronaNG portal](https://campusonline.uni-ulm.de/CoronaNG/index.html).
 
 ## The Problem
