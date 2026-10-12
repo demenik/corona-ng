@@ -1,6 +1,6 @@
 use crate::app::{Course, CourseStatus, SIGNUP_ATTEMPTS};
 use crate::ui::components::spinner::Spinner;
-use chrono::{Local, NaiveTime};
+use chrono::NaiveTime;
 use ratatui::{
     prelude::*,
     widgets::{Block, Borders, Cell, Clear, List, ListItem, Paragraph, Row, Table},
@@ -47,7 +47,7 @@ impl SignUpPopup {
     }
 
     fn calculate_countdown(&self) -> String {
-        let now = Local::now().time();
+        let now = crate::backend::server_now().time();
         if let Ok(target) = NaiveTime::parse_from_str(&self.target_time, "%H:%M") {
             let diff = target.signed_duration_since(now);
             if diff.num_seconds() <= 0 {

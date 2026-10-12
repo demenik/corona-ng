@@ -1,4 +1,4 @@
-use chrono::{Local, NaiveTime};
+use chrono::NaiveTime;
 use crossterm::event::{KeyCode, KeyEvent};
 use ratatui::{
     prelude::*,
@@ -53,7 +53,7 @@ impl DashboardScreen {
     }
 
     fn calculate_countdown(&self, target_time_str: &str) -> String {
-        let now = Local::now().time();
+        let now = crate::backend::server_now().time();
         if let Ok(target) = NaiveTime::parse_from_str(target_time_str, "%H:%M") {
             let diff = target.signed_duration_since(now);
             if diff.num_seconds() <= 0 {
@@ -311,7 +311,9 @@ impl Component for DashboardScreen {
             .split(body_layout[1]);
 
         // Live Clock
-        let now = Local::now().format("%H:%M:%S%.3f").to_string();
+        let now = crate::backend::server_now()
+            .format("%H:%M:%S%.3f")
+            .to_string();
         f.render_widget(
             Paragraph::new(now)
                 .alignment(Alignment::Center)

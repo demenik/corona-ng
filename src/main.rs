@@ -183,7 +183,7 @@ fn run_ui(
 
                             // Update details with success/fail counts and local/server times
                             let local_time =
-                                chrono::Local::now().format("%H:%M:%S%.3f").to_string();
+                                backend::server_now().format("%H:%M:%S%.3f").to_string();
 
                             let mut errors = Vec::new();
                             if let Some(err) = &report.general_error {
@@ -217,7 +217,7 @@ fn run_ui(
         if app.current_screen == CurrentScreen::Dashboard {
             let mut target_to_open = None;
             let mut course_ids = Vec::new();
-            let now = chrono::Local::now().time();
+            let now = backend::server_now().time();
 
             // Find nearest schedule that is within 10 seconds
             for times in app.dashboard_screen.schedules.values() {

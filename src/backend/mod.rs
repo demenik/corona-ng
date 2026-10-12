@@ -13,6 +13,14 @@ use crate::{
 pub mod network;
 pub mod scraper;
 
+/// Time zone of the CoronaNG server. Schedule times are interpreted in this zone.
+pub const SERVER_TZ: chrono_tz::Tz = chrono_tz::Europe::Berlin;
+
+/// Current time in [`SERVER_TZ`].
+pub fn server_now() -> chrono::DateTime<chrono_tz::Tz> {
+    chrono::Utc::now().with_timezone(&SERVER_TZ)
+}
+
 pub struct BackendState {
     pub schedule: HashMap<String, Vec<String>>,
     pub triggered_schedules: HashSet<(chrono::NaiveDate, String)>,
@@ -55,7 +63,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
             }
 
             _ = ticker.tick() => {
-                let now = chrono::Local::now();
+                let now = server_now();
                 let time_str = now.format("%H:%M:%S%.3f").to_string();
                 let _ = backend_tx.send(BackendEvent::ClockTick(time_str)).await;
 
