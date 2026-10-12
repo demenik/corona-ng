@@ -258,18 +258,15 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
 
                         let _ = backend_tx.send(BackendEvent::InternalMessage(format!("Anmeldung für {} gestartet!", target_time))).await;
 
-                        // Send half an RTT early so the request arrives at the target
-                        let clock = clock::get();
-                        let send_at = SERVER_TZ
+                        let target = SERVER_TZ
                             .from_local_datetime(&target_dt)
                             .earliest()
-                            .map_or_else(Instant::now, |t| clock.instant_at(t - clock.rtt / 2));
+                            .unwrap_or(now);
 
                         let client = state.network.clone();
                         let btx = backend_tx.clone();
                         tokio::spawn(async move {
-                            tokio::time::sleep_until(send_at.into()).await;
-                            client.sign_up_courses(ids, btx).await;
+                            client.sign_up_courses(ids, target, btx).await;
                         });
                     }
                 }

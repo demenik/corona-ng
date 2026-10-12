@@ -6,13 +6,14 @@ use std::{
 };
 
 use chrono::{DateTime, Duration, Utc};
+use chrono_tz::Tz;
 use reqwest::{Client, Method, RequestBuilder, StatusCode, cookie::Jar, header::DATE};
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, task::JoinSet};
 
 use crate::{
     app::{BackendEvent, BatchSignUpReport, Course, SIGNUP_ATTEMPTS, User},
     backend::{
-        clock::{BoundarySample, OffsetEstimate, OffsetSample, TimeProbe},
+        clock::{self, BoundarySample, OffsetEstimate, OffsetSample, TimeProbe},
         scraper::{self, check_login_error, parse_courses},
     },
     store::{Credentials, PersistentStore, SecureCredentialStore},
@@ -36,6 +37,25 @@ const BOUNDARY_LEAD: Duration = Duration::milliseconds(150);
 
 /// Give up on a boundary round after this long
 const BOUNDARY_TIMEOUT: std::time::Duration = std::time::Duration::from_millis(2500);
+
+/// Number of parallel sign-up requests sent around the target. Kept low so the
+/// server is not flooded and no rate limit is triggered
+const SIGNUP_BURST_COUNT: usize = 4;
+
+/// Spacing between the planned arrivals of burst requests at and after the target
+const SIGNUP_BURST_SPACING_MS: i64 = 25;
+
+const _: () = assert!(SIGNUP_BURST_COUNT >= 2 && SIGNUP_BURST_COUNT <= SIGNUP_ATTEMPTS);
+
+/// Planned server arrival times of the burst requests relative to the target.
+/// The first one is early by the clock `uncertainty`, so an offset error in either
+/// direction is still covered. The others arrive at the target and then spaced apart
+fn burst_arrivals(uncertainty: Duration) -> Vec<Duration> {
+    let spacing = Duration::milliseconds(SIGNUP_BURST_SPACING_MS);
+    std::iter::once(-uncertainty)
+        .chain((0..SIGNUP_BURST_COUNT as i32 - 1).map(|k| spacing * k))
+        .collect()
+}
 
 /// Where the server time is read from
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -451,50 +471,104 @@ impl NetworkClient {
             .map(|_| ())
     }
 
-    pub async fn sign_up_courses(&self, ids: Vec<String>, tx: mpsc::Sender<BackendEvent>) {
+    /// Send one sign-up request for `ids` and report it as attempt `attempt_num`.
+    /// Returns `None` if the session is lost and could not be renewed
+    async fn sign_up_attempt(
+        &self,
+        attempt_num: u32,
+        ids: &[String],
+        tx: &mpsc::Sender<BackendEvent>,
+    ) -> Option<BatchSignUpReport> {
+        let report = match self
+            .with_session(tx, |client| post_sign_up(client, ids))
+            .await
+        {
+            Ok(html) => {
+                let courses = parse_courses(&html);
+                let mut course_map = HashMap::new();
+                for c in &courses {
+                    course_map.insert(c.name.clone(), c.id.clone());
+                }
+                let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
+
+                scraper::parse_sign_up_results(&html, &course_map)
+            }
+            Err(e @ NetworkError::SessionExpired) => {
+                let _ = tx
+                    .send(BackendEvent::SignUpAttempt(
+                        attempt_num,
+                        BatchSignUpReport::from_general_error(e.to_string()),
+                    ))
+                    .await;
+                return None;
+            }
+            Err(e) => BatchSignUpReport::from_general_error(e.to_string()),
+        };
+
+        let _ = tx
+            .send(BackendEvent::SignUpAttempt(attempt_num, report.clone()))
+            .await;
+        Some(report)
+    }
+
+    /// Sign up for `ids` at server time `target`: first a parallel burst whose
+    /// requests arrive staggered around `target`, then sequential retries
+    pub async fn sign_up_courses(
+        &self,
+        ids: Vec<String>,
+        target: DateTime<Tz>,
+        tx: mpsc::Sender<BackendEvent>,
+    ) {
         if ids.is_empty() {
             return;
         }
 
-        let mut last_report: Option<BatchSignUpReport> = None;
-
-        for i in 0..SIGNUP_ATTEMPTS {
-            let attempt_num = (i + 1) as u32;
-
-            let report = match self
-                .with_session(&tx, |client| post_sign_up(client, &ids))
-                .await
-            {
-                Ok(html) => {
-                    let courses = parse_courses(&html);
-                    let mut course_map = HashMap::new();
-                    for c in &courses {
-                        course_map.insert(c.name.clone(), c.id.clone());
-                    }
-                    let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
-
-                    scraper::parse_sign_up_results(&html, &course_map)
-                }
-                Err(e @ NetworkError::SessionExpired) => {
-                    let _ = tx
-                        .send(BackendEvent::SignUpAttempt(
-                            attempt_num,
-                            BatchSignUpReport::from_general_error(e.to_string()),
-                        ))
-                        .await;
-                    let _ = tx
-                        .send(BackendEvent::InternalMessage(
-                            "Anmeldung wegen abgelaufener Session abgebrochen.".to_string(),
-                        ))
-                        .await;
-                    return;
-                }
-                Err(e) => BatchSignUpReport::from_general_error(e.to_string()),
-            };
-
+        let session_lost = || async {
             let _ = tx
-                .send(BackendEvent::SignUpAttempt(attempt_num, report.clone()))
+                .send(BackendEvent::InternalMessage(
+                    "Anmeldung wegen abgelaufener Session abgebrochen.".to_string(),
+                ))
                 .await;
+        };
+
+        let clock = clock::get();
+        let mut burst = JoinSet::new();
+        for (i, arrival) in burst_arrivals(clock.uncertainty).into_iter().enumerate() {
+            // Send half an RTT early so the request arrives at its planned time
+            let send_at = clock.instant_at(target + arrival - clock.rtt / 2);
+            let client = self.clone();
+            let ids = ids.clone();
+            let tx = tx.clone();
+            burst.spawn(async move {
+                tokio::time::sleep_until(send_at.into()).await;
+                (i, client.sign_up_attempt(i as u32 + 1, &ids, &tx).await)
+            });
+        }
+
+        let mut burst_reports = vec![None; SIGNUP_BURST_COUNT];
+        let mut lost = false;
+        while let Some(joined) = burst.join_next().await {
+            match joined {
+                Ok((i, Some(report))) => burst_reports[i] = Some(report),
+                Ok((_, None)) => lost = true,
+                Err(_) => {}
+            }
+        }
+        if lost {
+            session_lost().await;
+            return;
+        }
+
+        let mut last_report: Option<BatchSignUpReport> = burst_reports
+            .into_iter()
+            .flatten()
+            .rfind(|r| r.total_success > 0 || r.total_failed > 0);
+
+        for i in SIGNUP_BURST_COUNT..SIGNUP_ATTEMPTS {
+            let Some(report) = self.sign_up_attempt((i + 1) as u32, &ids, &tx).await else {
+                session_lost().await;
+                return;
+            };
 
             if report.total_success > 0 || report.total_failed > 0 {
                 last_report = Some(report);
@@ -518,5 +592,20 @@ impl NetworkClient {
 impl Default for NetworkClient {
     fn default() -> Self {
         Self::new()
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn burst_covers_uncertainty_and_spacing() {
+        let arrivals = burst_arrivals(Duration::milliseconds(30));
+
+        assert_eq!(arrivals.len(), SIGNUP_BURST_COUNT);
+        assert_eq!(arrivals[0], Duration::milliseconds(-30));
+        assert_eq!(arrivals[1], Duration::zero());
+        assert_eq!(arrivals[2], Duration::milliseconds(SIGNUP_BURST_SPACING_MS));
     }
 }
