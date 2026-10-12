@@ -132,6 +132,8 @@ async fn sync_clock(client: &NetworkClient, tx: &mpsc::Sender<BackendEvent>) {
                 offset: estimate.offset,
                 synced_at: Some(Instant::now()),
                 samples: estimate.samples,
+                rtt: estimate.rtt,
+                uncertainty: estimate.uncertainty,
             });
             let _ = tx
                 .send(BackendEvent::ClockSynced {

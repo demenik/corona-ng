@@ -18,6 +18,10 @@ pub struct ServerClock {
     pub synced_at: Option<Instant>,
     /// Number of samples the current offset is based on
     pub samples: usize,
+    /// Typical round-trip time to the server
+    pub rtt: Duration,
+    /// Estimated error of `offset`
+    pub uncertainty: Duration,
 }
 
 impl ServerClock {
@@ -26,6 +30,8 @@ impl ServerClock {
             offset: Duration::zero(),
             synced_at: None,
             samples: 0,
+            rtt: Duration::zero(),
+            uncertainty: Duration::zero(),
         }
     }
 
@@ -86,6 +92,8 @@ pub struct BoundarySample {
     pub offset: Duration,
     /// Half the width of the local time window that contains the second boundary
     pub uncertainty: Duration,
+    /// Round-trip time of the probe that saw the new second
+    pub rtt: Duration,
 }
 
 impl BoundarySample {
@@ -105,6 +113,7 @@ impl BoundarySample {
         Some(Self {
             offset: after.server - (earliest + uncertainty),
             uncertainty,
+            rtt: after.rtt,
         })
     }
 }
@@ -118,6 +127,8 @@ pub struct OffsetEstimate {
     pub uncertainty: Duration,
     /// Number of samples the estimate is based on
     pub samples: usize,
+    /// Median round-trip time of the used samples
+    pub rtt: Duration,
 }
 
 impl OffsetEstimate {
@@ -132,6 +143,7 @@ impl OffsetEstimate {
         samples.sort_by_key(|s| s.rtt);
         samples.truncate(samples.len().div_ceil(2));
 
+        let rtts: Vec<Duration> = samples.iter().map(|s| s.rtt).collect();
         let mut offsets: Vec<Duration> = samples.iter().map(|s| s.offset).collect();
         offsets.sort();
 
@@ -139,6 +151,7 @@ impl OffsetEstimate {
             offset: median(&offsets),
             uncertainty: (offsets[offsets.len() - 1] - offsets[0]) / 2,
             samples: offsets.len(),
+            rtt: median(&rtts),
         })
     }
 
@@ -153,6 +166,8 @@ impl OffsetEstimate {
         offsets.sort();
         let mut uncertainties: Vec<Duration> = samples.iter().map(|s| s.uncertainty).collect();
         uncertainties.sort();
+        let mut rtts: Vec<Duration> = samples.iter().map(|s| s.rtt).collect();
+        rtts.sort();
 
         let spread = (offsets[offsets.len() - 1] - offsets[0]) / 2;
 
@@ -160,6 +175,7 @@ impl OffsetEstimate {
             offset: median(&offsets),
             uncertainty: median(&uncertainties).max(spread),
             samples: samples.len(),
+            rtt: median(&rtts),
         })
     }
 }
@@ -218,6 +234,7 @@ mod tests {
         assert_eq!(estimate.samples, 2);
         assert_eq!(estimate.offset, Duration::milliseconds(200));
         assert_eq!(estimate.uncertainty, Duration::milliseconds(100));
+        assert_eq!(estimate.rtt, Duration::milliseconds(25));
     }
 
     #[test]
@@ -233,6 +250,7 @@ mod tests {
 
         assert_eq!(estimate.samples, 3);
         assert_eq!(estimate.offset, Duration::milliseconds(50));
+        assert_eq!(estimate.rtt, Duration::milliseconds(10));
         assert_eq!(estimate.uncertainty, Duration::milliseconds(300));
     }
 
@@ -266,6 +284,7 @@ mod tests {
             BoundarySample::between(&probe(10_000, 30, 12), &probe(10_040, 30, 13)).unwrap();
         assert_eq!(sample.offset, Duration::milliseconds(2965));
         assert_eq!(sample.uncertainty, Duration::milliseconds(35));
+        assert_eq!(sample.rtt, Duration::milliseconds(30));
     }
 
     #[test]
@@ -273,6 +292,7 @@ mod tests {
         let boundary = |offset_ms, uncertainty_ms| BoundarySample {
             offset: Duration::milliseconds(offset_ms),
             uncertainty: Duration::milliseconds(uncertainty_ms),
+            rtt: Duration::milliseconds(uncertainty_ms * 2),
         };
 
         let tight = OffsetEstimate::from_boundaries(&[
@@ -283,6 +303,7 @@ mod tests {
         .unwrap();
         assert_eq!(tight.offset, Duration::milliseconds(100));
         assert_eq!(tight.uncertainty, Duration::milliseconds(30));
+        assert_eq!(tight.rtt, Duration::milliseconds(60));
 
         let spread = OffsetEstimate::from_boundaries(&[
             boundary(0, 10),
