@@ -47,7 +47,7 @@ impl SignUpPopup {
     }
 
     fn calculate_countdown(&self) -> String {
-        let now = crate::backend::server_now().time();
+        let now = crate::backend::clock::now().time();
         if let Ok(target) = NaiveTime::parse_from_str(&self.target_time, "%H:%M") {
             let diff = target.signed_duration_since(now);
             if diff.num_seconds() <= 0 {

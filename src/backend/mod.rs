@@ -10,16 +10,11 @@ use crate::{
     backend::network::NetworkClient,
 };
 
+pub mod clock;
 pub mod network;
 pub mod scraper;
 
-/// Time zone of the CoronaNG server. Schedule times are interpreted in this zone.
-pub const SERVER_TZ: chrono_tz::Tz = chrono_tz::Europe::Berlin;
-
-/// Current time in [`SERVER_TZ`].
-pub fn server_now() -> chrono::DateTime<chrono_tz::Tz> {
-    chrono::Utc::now().with_timezone(&SERVER_TZ)
-}
+pub use clock::SERVER_TZ;
 
 pub struct BackendState {
     pub schedule: HashMap<String, Vec<String>>,
@@ -35,7 +30,6 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
     };
 
     let mut ticker = tokio::time::interval(Duration::from_millis(10));
-    let time_offset = Duration::from_millis(0); // Placeholder for local vs server offset
 
     loop {
         tokio::select! {
@@ -63,7 +57,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
             }
 
             _ = ticker.tick() => {
-                let now = server_now();
+                let now = clock::now();
                 let time_str = now.format("%H:%M:%S%.3f").to_string();
                 let _ = backend_tx.send(BackendEvent::ClockTick(time_str)).await;
 
@@ -84,10 +78,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
 
                     if let Ok(target) = chrono::NaiveTime::parse_from_str(&target_time, "%H:%M") {
                         let target_dt = today.and_time(target);
-                        let target_dt_with_offset = target_dt - chrono::Duration::from_std(time_offset).unwrap();
-
-                        let now_naive = now.naive_local();
-                        let diff = target_dt_with_offset.signed_duration_since(now_naive);
+                        let diff = target_dt.signed_duration_since(now.naive_local());
 
                         // Trigger 200ms before target
                         if diff.num_milliseconds() <= 500 && diff.num_milliseconds() > -5000 {

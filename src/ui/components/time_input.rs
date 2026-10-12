@@ -23,11 +23,11 @@ impl TimeInput {
                 let m = parts[1].parse().unwrap_or(0);
                 (h, m)
             } else {
-                let now = crate::backend::server_now();
+                let now = crate::backend::clock::now();
                 ((now.hour() + 1) % 24, 0)
             }
         } else {
-            let now = crate::backend::server_now();
+            let now = crate::backend::clock::now();
             ((now.hour() + 1) % 24, 0)
         };
 

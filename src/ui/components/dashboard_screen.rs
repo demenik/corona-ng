@@ -53,7 +53,7 @@ impl DashboardScreen {
     }
 
     fn calculate_countdown(&self, target_time_str: &str) -> String {
-        let now = crate::backend::server_now().time();
+        let now = crate::backend::clock::now().time();
         if let Ok(target) = NaiveTime::parse_from_str(target_time_str, "%H:%M") {
             let diff = target.signed_duration_since(now);
             if diff.num_seconds() <= 0 {
@@ -311,7 +311,7 @@ impl Component for DashboardScreen {
             .split(body_layout[1]);
 
         // Live Clock
-        let now = crate::backend::server_now()
+        let now = crate::backend::clock::now()
             .format("%H:%M:%S%.3f")
             .to_string();
         f.render_widget(
