@@ -472,24 +472,26 @@ impl NetworkClient {
     }
 
     /// Send one sign-up request for `ids` and report it as attempt `attempt_num`.
-    /// Returns `None` if the session is lost and could not be renewed
+    /// Returns the report and the courses parsed from the response, or `None`
+    /// if the session is lost and could not be renewed
     async fn sign_up_attempt(
         &self,
         attempt_num: u32,
         ids: &[String],
         tx: &mpsc::Sender<BackendEvent>,
-    ) -> Option<BatchSignUpReport> {
+    ) -> Option<(BatchSignUpReport, Option<Vec<Course>>)> {
+        let mut courses = None;
         let report = match self
             .with_session(tx, |client| post_sign_up(client, ids))
             .await
         {
             Ok(html) => {
-                let courses = parse_courses(&html);
+                let parsed = parse_courses(&html);
                 let mut course_map = HashMap::new();
-                for c in &courses {
+                for c in &parsed {
                     course_map.insert(c.name.clone(), c.id.clone());
                 }
-                let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
+                courses = Some(parsed);
 
                 scraper::parse_sign_up_results(&html, &course_map)
             }
@@ -508,11 +510,12 @@ impl NetworkClient {
         let _ = tx
             .send(BackendEvent::SignUpAttempt(attempt_num, report.clone()))
             .await;
-        Some(report)
+        Some((report, courses))
     }
 
     /// Sign up for `ids` at server time `target`: first a parallel burst whose
     /// requests arrive staggered around `target`, then sequential retries
+    /// until a course is signed up
     pub async fn sign_up_courses(
         &self,
         ids: Vec<String>,
@@ -546,35 +549,52 @@ impl NetworkClient {
         }
 
         let mut burst_reports = vec![None; SIGNUP_BURST_COUNT];
+        // Courses from the response that arrived last reflect the newest server state
+        let mut last_courses = None;
         let mut lost = false;
         while let Some(joined) = burst.join_next().await {
             match joined {
-                Ok((i, Some(report))) => burst_reports[i] = Some(report),
+                Ok((i, Some((report, courses)))) => {
+                    burst_reports[i] = Some(report);
+                    last_courses = courses.or(last_courses);
+                }
                 Ok((_, None)) => lost = true,
                 Err(_) => {}
             }
-        }
-        if lost {
-            session_lost().await;
-            return;
         }
 
         let mut last_report: Option<BatchSignUpReport> = burst_reports
             .into_iter()
             .flatten()
             .rfind(|r| r.total_success > 0 || r.total_failed > 0);
+        let mut signed_up = last_report.as_ref().is_some_and(|r| r.total_success > 0);
 
-        for i in SIGNUP_BURST_COUNT..SIGNUP_ATTEMPTS {
-            let Some(report) = self.sign_up_attempt((i + 1) as u32, &ids, &tx).await else {
-                session_lost().await;
-                return;
+        let mut attempt = SIGNUP_BURST_COUNT;
+        while !lost && !signed_up && attempt < SIGNUP_ATTEMPTS {
+            attempt += 1;
+            let Some((report, courses)) = self.sign_up_attempt(attempt as u32, &ids, &tx).await
+            else {
+                lost = true;
+                break;
             };
 
+            last_courses = courses.or(last_courses);
             if report.total_success > 0 || report.total_failed > 0 {
+                signed_up = report.total_success > 0;
                 last_report = Some(report);
             }
 
-            tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            if !signed_up && attempt < SIGNUP_ATTEMPTS {
+                tokio::time::sleep(std::time::Duration::from_millis(150)).await;
+            }
+        }
+
+        if let Some(courses) = last_courses {
+            let _ = tx.send(BackendEvent::CoursesUpdate(courses)).await;
+        }
+        if lost {
+            session_lost().await;
+            return;
         }
 
         if let Some(report) = last_report {

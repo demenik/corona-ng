@@ -13,6 +13,8 @@ pub enum RequestStatus {
     Running,
     Success,
     Failed,
+    /// Not sent because an earlier attempt already succeeded
+    Skipped,
 }
 
 pub struct RequestDetail {
@@ -110,6 +112,7 @@ impl SignUpPopup {
                 }
                 RequestStatus::Success => ("✅", Style::default().fg(Color::Green)),
                 RequestStatus::Failed => ("❌", Style::default().fg(Color::Red)),
+                RequestStatus::Skipped => ("➖", Style::default().fg(Color::DarkGray)),
             };
 
             let (s_text, f_text, local_text, server_text, errors) =

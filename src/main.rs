@@ -150,11 +150,12 @@ fn run_ui(
                             }
                         }
 
-                        // Mark all requests as either Success or Failed based on the final general_error status
+                        // Mark running requests as either Success or Failed based on the final
+                        // general_error status. Waiting requests were never sent
                         for i in 0..SIGNUP_ATTEMPTS {
-                            if popup.request_statuses[i] == RequestStatus::Waiting
-                                || popup.request_statuses[i] == RequestStatus::Running
-                            {
+                            if popup.request_statuses[i] == RequestStatus::Waiting {
+                                popup.request_statuses[i] = RequestStatus::Skipped;
+                            } else if popup.request_statuses[i] == RequestStatus::Running {
                                 popup.request_statuses[i] = if report.general_error.is_none() {
                                     RequestStatus::Success
                                 } else {

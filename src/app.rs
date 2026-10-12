@@ -6,7 +6,8 @@ use crate::{
 };
 use tokio::sync::mpsc;
 
-pub const SIGNUP_ATTEMPTS: usize = 10;
+/// Burst requests plus sequential retries
+pub const SIGNUP_ATTEMPTS: usize = 7;
 
 /// Clock offsets above this hint at a broken system clock
 pub const CLOCK_WARN_OFFSET_MS: i64 = 1000;
