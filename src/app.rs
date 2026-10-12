@@ -82,6 +82,20 @@ impl BatchSignUpReport {
     }
 }
 
+/// Timing of one sign-up request in estimated server time, relative to the target.
+/// Negative values are before the target
+#[derive(Debug, Clone, Copy)]
+pub struct SignUpTiming {
+    /// Planned send time, `None` for sequential retries
+    pub planned: Option<chrono::Duration>,
+    /// Actual send time
+    pub sent: chrono::Duration,
+    /// Estimated arrival at the server: send time plus half the synced RTT
+    pub arrival: chrono::Duration,
+    /// Time the response was read
+    pub response: chrono::Duration,
+}
+
 pub enum UiEvent {
     Login(String, String),
     Logout,
@@ -99,7 +113,7 @@ pub enum BackendEvent {
     CoursesUpdate(Vec<Course>),
     FetchFailed(String),
     SignUpResult(BatchSignUpReport),
-    SignUpAttempt(u32, BatchSignUpReport),
+    SignUpAttempt(u32, BatchSignUpReport, SignUpTiming),
     InternalMessage(String),
 }
 

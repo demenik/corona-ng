@@ -11,7 +11,7 @@ use reqwest::{Client, Method, RequestBuilder, StatusCode, cookie::Jar, header::D
 use tokio::{sync::mpsc, task::JoinSet};
 
 use crate::{
-    app::{BackendEvent, BatchSignUpReport, Course, SIGNUP_ATTEMPTS, User},
+    app::{BackendEvent, BatchSignUpReport, Course, SIGNUP_ATTEMPTS, SignUpTiming, User},
     backend::{
         clock::{self, BoundarySample, OffsetEstimate, OffsetSample, TimeProbe},
         scraper::{self, check_login_error, parse_courses},
@@ -471,20 +471,37 @@ impl NetworkClient {
             .map(|_| ())
     }
 
-    /// Send one sign-up request for `ids` and report it as attempt `attempt_num`.
-    /// Returns the report and the courses parsed from the response, or `None`
-    /// if the session is lost and could not be renewed
+    /// Send one sign-up request for `ids` and report it as attempt `attempt_num`
+    /// with its timing relative to `target`. Returns the report and the courses
+    /// parsed from the response, or `None` if the session is lost and could not be renewed
     async fn sign_up_attempt(
         &self,
         attempt_num: u32,
         ids: &[String],
+        target: DateTime<Tz>,
+        planned: Option<DateTime<Tz>>,
         tx: &mpsc::Sender<BackendEvent>,
     ) -> Option<(BatchSignUpReport, Option<Vec<Course>>)> {
+        // Set on every send, so a retry after a re-login reports its own send time
+        let sent = std::sync::Mutex::new(clock::now());
+        let result = self
+            .with_session(tx, |client| {
+                *sent.lock().unwrap() = clock::now();
+                post_sign_up(client, ids)
+            })
+            .await;
+
+        let clock = clock::get();
+        let sent = sent.into_inner().unwrap();
+        let timing = SignUpTiming {
+            planned: planned.map(|p| p - target),
+            sent: sent - target,
+            arrival: sent + clock.rtt / 2 - target,
+            response: clock.now() - target,
+        };
+
         let mut courses = None;
-        let report = match self
-            .with_session(tx, |client| post_sign_up(client, ids))
-            .await
-        {
+        let report = match result {
             Ok(html) => {
                 let parsed = parse_courses(&html);
                 let mut course_map = HashMap::new();
@@ -500,6 +517,7 @@ impl NetworkClient {
                     .send(BackendEvent::SignUpAttempt(
                         attempt_num,
                         BatchSignUpReport::from_general_error(e.to_string()),
+                        timing,
                     ))
                     .await;
                 return None;
@@ -508,7 +526,11 @@ impl NetworkClient {
         };
 
         let _ = tx
-            .send(BackendEvent::SignUpAttempt(attempt_num, report.clone()))
+            .send(BackendEvent::SignUpAttempt(
+                attempt_num,
+                report.clone(),
+                timing,
+            ))
             .await;
         Some((report, courses))
     }
@@ -538,13 +560,17 @@ impl NetworkClient {
         let mut burst = JoinSet::new();
         for (i, arrival) in burst_arrivals(clock.uncertainty).into_iter().enumerate() {
             // Send half an RTT early so the request arrives at its planned time
-            let send_at = clock.instant_at(target + arrival - clock.rtt / 2);
+            let planned = target + arrival - clock.rtt / 2;
+            let send_at = clock.instant_at(planned);
             let client = self.clone();
             let ids = ids.clone();
             let tx = tx.clone();
             burst.spawn(async move {
                 tokio::time::sleep_until(send_at.into()).await;
-                (i, client.sign_up_attempt(i as u32 + 1, &ids, &tx).await)
+                let report = client
+                    .sign_up_attempt(i as u32 + 1, &ids, target, Some(planned), &tx)
+                    .await;
+                (i, report)
             });
         }
 
@@ -572,7 +598,9 @@ impl NetworkClient {
         let mut attempt = SIGNUP_BURST_COUNT;
         while !lost && !signed_up && attempt < SIGNUP_ATTEMPTS {
             attempt += 1;
-            let Some((report, courses)) = self.sign_up_attempt(attempt as u32, &ids, &tx).await
+            let Some((report, courses)) = self
+                .sign_up_attempt(attempt as u32, &ids, target, None, &tx)
+                .await
             else {
                 lost = true;
                 break;

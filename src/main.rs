@@ -176,7 +176,7 @@ fn run_ui(
                 BackendEvent::InternalMessage(msg) => {
                     app.dashboard_screen.set_status(msg);
                 }
-                BackendEvent::SignUpAttempt(attempt, report) => {
+                BackendEvent::SignUpAttempt(attempt, report, timing) => {
                     if let Some(popup) = &mut app.dashboard_screen.signup_popup {
                         let idx = (attempt as usize).saturating_sub(1);
                         if idx < SIGNUP_ATTEMPTS {
@@ -206,10 +206,6 @@ fn run_ui(
                                 RequestStatus::Running
                             };
 
-                            // Update details with success/fail counts and local/server times
-                            let local_time =
-                                backend::clock::now().format("%H:%M:%S%.3f").to_string();
-
                             let mut errors = Vec::new();
                             if let Some(err) = &report.general_error {
                                 errors.push(err.clone());
@@ -228,7 +224,7 @@ fn run_ui(
                             popup.request_details[idx] = Some(RequestDetail {
                                 success_count: report.total_success,
                                 failed_count: report.total_failed,
-                                local_time,
+                                timing,
                                 server_time: report.server_time.clone(),
                                 errors,
                             });
