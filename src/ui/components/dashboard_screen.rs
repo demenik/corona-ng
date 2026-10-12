@@ -314,15 +314,16 @@ impl Component for DashboardScreen {
             .split(body_layout[1]);
 
         // Live Clock
-        let now = crate::backend::clock::now()
-            .format("%H:%M:%S%.3f")
-            .to_string();
+        let clock = crate::backend::clock::get();
+        let now = format!(
+            "{} {:+.3}s",
+            chrono::Utc::now()
+                .with_timezone(&crate::backend::SERVER_TZ)
+                .format("%H:%M:%S%.3f"),
+            clock.offset.num_milliseconds() as f64 / 1000.0
+        );
         let sync = match self.clock_sync {
-            Some((offset_ms, uncertainty_ms)) => format!(
-                "{:+.3}s +/-{}ms",
-                offset_ms as f64 / 1000.0,
-                uncertainty_ms
-            ),
+            Some((_, uncertainty_ms)) => format!("Server-Offset +/-{}ms", uncertainty_ms),
             None => "nicht synchronisiert".to_string(),
         };
         f.render_widget(
@@ -330,8 +331,8 @@ impl Component for DashboardScreen {
                 Line::from(now),
                 Line::from(sync).style(Style::default().fg(Color::DarkGray)),
             ])
-                .alignment(Alignment::Center)
-                .block(Block::default().borders(Borders::ALL).title(" Live Zeit ")),
+            .alignment(Alignment::Center)
+            .block(Block::default().borders(Borders::ALL).title(" Live Zeit ")),
             sidebar_chunks[0],
         );
 
