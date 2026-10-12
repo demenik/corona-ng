@@ -7,7 +7,10 @@ use tokio::{sync::mpsc, task::JoinHandle};
 
 use crate::{
     app::{BackendEvent, UiEvent},
-    backend::{clock::ServerClock, network::NetworkClient},
+    backend::{
+        clock::ServerClock,
+        network::{NetworkClient, NetworkError},
+    },
 };
 
 pub mod clock;
@@ -19,7 +22,7 @@ pub use clock::SERVER_TZ;
 /// Interval between periodic clock syncs while logged in
 const CLOCK_SYNC_INTERVAL: Duration = Duration::from_secs(600);
 
-/// An extra clock sync starts when a scheduled target is at most this far away
+/// An extra clock sync and session check start when a scheduled target is at most this far away
 const PRE_TARGET_SYNC_LEAD: chrono::Duration = chrono::Duration::seconds(60);
 
 /// No clock sync starts when a scheduled target is this close, so sync requests
@@ -33,8 +36,8 @@ pub struct BackendState {
     /// Start of the last clock sync attempt
     last_sync: Option<Instant>,
     sync_task: Option<JoinHandle<()>>,
-    /// Targets that already received their pre-target clock sync
-    pre_synced_schedules: HashSet<(chrono::NaiveDate, String)>,
+    /// Targets that already received their pre-target clock sync and session check
+    prepared_schedules: HashSet<(chrono::NaiveDate, String)>,
 }
 
 impl BackendState {
@@ -57,7 +60,28 @@ impl BackendState {
             task.abort();
         }
         self.last_sync = None;
-        self.pre_synced_schedules.clear();
+        self.prepared_schedules.clear();
+    }
+
+    /// Check the session in the background, so an expired session is renewed
+    /// before the target instead of at it
+    fn start_session_refresh(&self, tx: &mpsc::Sender<BackendEvent>) {
+        let client = self.network.clone();
+        let tx = tx.clone();
+        tokio::spawn(async move {
+            match client.refresh_session(&tx).await {
+                // A failed re-login already reported `LoginFailed`
+                Ok(()) | Err(NetworkError::SessionExpired) => {}
+                Err(e) => {
+                    let _ = tx
+                        .send(BackendEvent::InternalMessage(format!(
+                            "Sessionprüfung fehlgeschlagen: {}",
+                            e
+                        )))
+                        .await;
+                }
+            }
+        });
     }
 }
 
@@ -95,7 +119,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
         network: NetworkClient::new(),
         last_sync: None,
         sync_task: None,
-        pre_synced_schedules: HashSet::new(),
+        prepared_schedules: HashSet::new(),
     };
 
     let mut ticker = tokio::time::interval(Duration::from_millis(10));
@@ -168,8 +192,9 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
                     if logged_in
                         && diff > SYNC_QUIET_WINDOW
                         && diff <= PRE_TARGET_SYNC_LEAD
-                        && state.pre_synced_schedules.insert(key.clone())
+                        && state.prepared_schedules.insert(key.clone())
                     {
+                        state.start_session_refresh(&backend_tx);
                         state.start_sync(&backend_tx);
                     }
 
@@ -200,7 +225,7 @@ pub async fn run(mut ui_rx: mpsc::Receiver<UiEvent>, backend_tx: mpsc::Sender<Ba
 
                 // Cleanup triggered schedules from previous days
                 state.triggered_schedules.retain(|(date, _)| *date >= today);
-                state.pre_synced_schedules.retain(|(date, _)| *date >= today);
+                state.prepared_schedules.retain(|(date, _)| *date >= today);
             }
         }
     }

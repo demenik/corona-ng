@@ -51,11 +51,13 @@ cargo run --release
 4. **Schedule:** Select a course and set the registration time (e.g., `16:00`).
 5. **Deploy:** Keep the app running; it will automatically trigger the registration burst at the scheduled time. A popup will open shortly before the timer ends.
 
-> **Important:** Never sign in to the web-portal while the TUI is logged in.
-This will cause the TUI to be silently logged out.
-This will cause the requests to be rejected when the timer ends.
-You need to exit to the main menu of the TUI (before login) and login again
-to restore the session if you did this by accident.
+> **Important:** CoronaNG allows only one session per user. Signing in to the
+web-portal ends the session of the TUI, and a login by the TUI ends the session
+in the browser. The TUI logs in again automatically when its session expired,
+and checks its session about 60s before each scheduled target. If you sign in
+on the website shortly before the target, the TUI has to log in again at the
+target itself, which costs time. Do not use the website in the last minute
+before a scheduled target.
 
 ## Disclaimer
 This tool is for personal use and intended to assist in course registration. Please use it responsibly and in accordance with the university's IT policies.

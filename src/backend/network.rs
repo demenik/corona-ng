@@ -440,6 +440,17 @@ impl NetworkClient {
         Ok(parse_courses(&html))
     }
 
+    /// Fetch a logged-in page and log in again if the session expired
+    pub async fn refresh_session(
+        &self,
+        tx: &mpsc::Sender<BackendEvent>,
+    ) -> Result<(), NetworkError> {
+        let courses_url = format!("{}/user/mycorona.html", BASE_URL);
+        self.with_session(tx, |client| fetch_page(client.get(&courses_url)))
+            .await
+            .map(|_| ())
+    }
+
     pub async fn sign_up_courses(&self, ids: Vec<String>, tx: mpsc::Sender<BackendEvent>) {
         if ids.is_empty() {
             return;
