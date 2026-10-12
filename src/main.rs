@@ -3,7 +3,9 @@ mod backend;
 mod store;
 mod ui;
 
-use crate::app::{App, BackendEvent, CurrentScreen, SIGNUP_ATTEMPTS, SignUpOutcome, UiEvent};
+use crate::app::{
+    App, BackendEvent, CLOCK_WARN_OFFSET_MS, CurrentScreen, SIGNUP_ATTEMPTS, SignUpOutcome, UiEvent,
+};
 use crate::store::{Credentials, JsonScheduleStore, PersistentStore, SecureCredentialStore};
 use crate::ui::components::{
     Component, ComponentAction,
@@ -76,6 +78,18 @@ fn run_ui(
         while let Ok(msg) = backend_rx.try_recv() {
             match msg {
                 BackendEvent::ClockTick(time) => app.clock = time,
+                BackendEvent::ClockSynced {
+                    offset_ms,
+                    uncertainty_ms,
+                } => {
+                    app.dashboard_screen.clock_sync = Some((offset_ms, uncertainty_ms));
+                    if offset_ms.abs() > CLOCK_WARN_OFFSET_MS {
+                        app.dashboard_screen.set_status(format!(
+                            "Warnung: Systemuhr weicht {:+.3}s von der Serverzeit ab.",
+                            offset_ms as f64 / 1000.0
+                        ));
+                    }
+                }
                 BackendEvent::LoginSuccess(user) => {
                     app.login_screen.is_loading = false;
                     let _ = app.tx.try_send(UiEvent::FetchCourses);

@@ -62,7 +62,8 @@ impl NetworkClient {
         Self { client, cookie_jar }
     }
 
-    pub async fn login(&self, user: &str, pass: &str, tx: mpsc::Sender<BackendEvent>) {
+    /// Log in and report the outcome via `tx`. Returns `true` on success
+    pub async fn login(&self, user: &str, pass: &str, tx: mpsc::Sender<BackendEvent>) -> bool {
         let login_url = format!("{}/index.html", BASE_URL);
         let mut body = HashMap::new();
         body.insert("uid", user);
@@ -70,16 +71,15 @@ impl NetworkClient {
 
         match self.client.post(login_url).form(&body).send().await {
             Ok(response) if response.status().is_success() => match response.text().await {
-                Ok(html) => {
-                    let result = check_login_error(&html);
-                    if let Err(msg) = result {
-                        let _ = tx.send(BackendEvent::LoginFailed(msg)).await;
-                    } else {
-                        let _ = tx
-                            .send(BackendEvent::LoginSuccess(result.ok().unwrap()))
-                            .await;
+                Ok(html) => match check_login_error(&html) {
+                    Ok(user) => {
+                        let _ = tx.send(BackendEvent::LoginSuccess(user)).await;
+                        return true;
                     }
-                }
+                    Err(msg) => {
+                        let _ = tx.send(BackendEvent::LoginFailed(msg)).await;
+                    }
+                },
                 Err(e) => {
                     let _ = tx
                         .send(BackendEvent::LoginFailed(format!(
@@ -97,6 +97,8 @@ impl NetworkClient {
                 let _ = tx.send(BackendEvent::LoginFailed(e.to_string())).await;
             }
         }
+
+        false
     }
 
     /// Coarse estimate of the server clock offset from `n` requests.

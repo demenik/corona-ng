@@ -8,6 +8,9 @@ use tokio::sync::mpsc;
 
 pub const SIGNUP_ATTEMPTS: usize = 10;
 
+/// Clock offsets above this hint at a broken system clock
+pub const CLOCK_WARN_OFFSET_MS: i64 = 1000;
+
 #[derive(PartialEq)]
 pub enum CurrentScreen {
     Start,
@@ -89,6 +92,7 @@ pub enum UiEvent {
 
 pub enum BackendEvent {
     ClockTick(String),
+    ClockSynced { offset_ms: i64, uncertainty_ms: i64 },
     LoginSuccess(User),
     LoginFailed(String),
     CoursesUpdate(Vec<Course>),

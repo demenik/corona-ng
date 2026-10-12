@@ -31,6 +31,8 @@ pub struct DashboardScreen {
     pub user: Option<User>,
     pub time_input: Option<TimeInput>,
     pub signup_popup: Option<SignUpPopup>,
+    /// Last measured `(offset_ms, uncertainty_ms)` of the server clock
+    pub clock_sync: Option<(i64, i64)>,
 }
 
 impl DashboardScreen {
@@ -45,6 +47,7 @@ impl DashboardScreen {
             user: None,
             time_input: None,
             signup_popup: None,
+            clock_sync: None,
         }
     }
 
@@ -303,7 +306,7 @@ impl Component for DashboardScreen {
         let sidebar_chunks = Layout::default()
             .direction(Direction::Vertical)
             .constraints([
-                Constraint::Length(3), // Live Clock
+                Constraint::Length(4), // Live Clock
                 Constraint::Min(0),    // Countdowns
                 Constraint::Length(3), // Reload Button
                 Constraint::Length(3), // Logout Button
@@ -314,8 +317,19 @@ impl Component for DashboardScreen {
         let now = crate::backend::clock::now()
             .format("%H:%M:%S%.3f")
             .to_string();
+        let sync = match self.clock_sync {
+            Some((offset_ms, uncertainty_ms)) => format!(
+                "{:+.3}s +/-{}ms",
+                offset_ms as f64 / 1000.0,
+                uncertainty_ms
+            ),
+            None => "nicht synchronisiert".to_string(),
+        };
         f.render_widget(
-            Paragraph::new(now)
+            Paragraph::new(vec![
+                Line::from(now),
+                Line::from(sync).style(Style::default().fg(Color::DarkGray)),
+            ])
                 .alignment(Alignment::Center)
                 .block(Block::default().borders(Borders::ALL).title(" Live Zeit ")),
             sidebar_chunks[0],
